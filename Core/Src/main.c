@@ -115,16 +115,25 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   // Initialize uAT parser on huart3
-  if (!uAT_Init(&huart2))
+  uAT_Result_t result = uAT_Init(&huart2);
+  if (result != UAT_OK)
   {
     // handle init error (blink LED, etc.)
+    printf("uAT parser initialization failed with error code: %d\n", result);
     Error_Handler();
   }
   printf("uAT parser initialized\n");
 
 
-  uAT_RegisterCommand("+CREG", creg_handler);
-  uAT_RegisterCommand("OK", ok_handler);
+  result = uAT_RegisterCommand("+CREG", creg_handler);
+  if (result != UAT_OK) {
+    printf("Failed to register +CREG handler: %d\n", result);
+  }
+
+  result = uAT_RegisterCommand("OK", ok_handler);
+  if (result != UAT_OK) {
+    printf("Failed to register OK handler: %d\n", result);
+  }
 
   // retval = ATC_SendReceive(&hAtc, "ATI\r\n", 1000, NULL, 1000, 2, "\r\nOK\r\n", "\r\nERROR\r\n");
   // printf("ATC_SendReceive returned %d\n", retval);
@@ -258,27 +267,49 @@ static void App_Task(void *pvParameters)
 {
   printf("Application task started\r\n");
   char myBuff[1024];
+  uAT_Result_t result;
   
   for (;;)
   {
     // e.g. periodically send an AT command
     printf("[%lu] sending 'AT' command\r\n", HAL_GetTick());
-    uAT_SendCommand("AT");
+    result = uAT_SendCommand("AT");
+    if (result != UAT_OK) {
+      printf("Failed to send AT command: %d\r\n", result);
+    }
     vTaskDelay(pdMS_TO_TICKS(1000));
+    
     printf("[%lu] sending 'AT+CREG?' command\r\n", HAL_GetTick());
-    uAT_SendCommand("AT+CREG?");
+    result = uAT_SendCommand("AT+CREG?");
+    if (result != UAT_OK) {
+      printf("Failed to send AT+CREG? command: %d\r\n", result);
+    }
     vTaskDelay(pdMS_TO_TICKS(1000));
+    
     printf("[%lu] sending 'AT!GSTATUS?' command\r\n", HAL_GetTick());
-    uAT_SendCommand("AT!GSTATUS?");
+    result = uAT_SendCommand("AT!GSTATUS?");
+    if (result != UAT_OK) {
+      printf("Failed to send AT!GSTATUS? command: %d\r\n", result);
+    }
     vTaskDelay(pdMS_TO_TICKS(1000));
+    
     if (uAT_UnregisterCommand("OK") != UAT_OK)
     {
       printf("Failed to unregister command\r\n");
     }
-    if (UAT_OK != (uAT_SendReceive("ATI", "OK", myBuff, sizeof(myBuff), pdMS_TO_TICKS(1000))))
-      printf("Failed to uAT_SendReceive command\r\n");
-    printf("[%lu] received: \n\n%s\r\n", HAL_GetTick(), myBuff);
-    uAT_RegisterCommand("OK", ok_handler);
+    
+    result = uAT_SendReceive("ATI", "OK", myBuff, sizeof(myBuff), pdMS_TO_TICKS(1000));
+    if (result != UAT_OK) {
+      printf("Failed to uAT_SendReceive command: %d\r\n", result);
+    } else {
+      printf("[%lu] received: \n\n%s\r\n", HAL_GetTick(), myBuff);
+    }
+    
+    result = uAT_RegisterCommand("OK", ok_handler);
+    if (result != UAT_OK) {
+      printf("Failed to re-register OK handler: %d\r\n", result);
+    }
+    
     vTaskDelay(pdMS_TO_TICKS(5000));
   }
 }
