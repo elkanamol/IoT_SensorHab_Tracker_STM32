@@ -1,0 +1,5 @@
+C:/Users/elkanam/Documents/RT_Embedded_Linux/Arm_Embedded_courcse/vscode/nucleo_f411_blincky2/nucleo_f756_uart_DMA_ATC_cmd_rc76/CMakeFiles/nucleo_f756_uart_DMA_ATC_cmd_rc76.dir
+C:/Users/elkanam/Documents/RT_Embedded_Linux/Arm_Embedded_courcse/vscode/nucleo_f411_blincky2/nucleo_f756_uart_DMA_ATC_cmd_rc76/CMakeFiles/edit_cache.dir
+C:/Users/elkanam/Documents/RT_Embedded_Linux/Arm_Embedded_courcse/vscode/nucleo_f411_blincky2/nucleo_f756_uart_DMA_ATC_cmd_rc76/CMakeFiles/rebuild_cache.dir
+C:/Users/elkanam/Documents/RT_Embedded_Linux/Arm_Embedded_courcse/vscode/nucleo_f411_blincky2/nucleo_f756_uart_DMA_ATC_cmd_rc76/cmake/stm32cubemx/CMakeFiles/edit_cache.dir
+C:/Users/elkanam/Documents/RT_Embedded_Linux/Arm_Embedded_courcse/vscode/nucleo_f411_blincky2/nucleo_f756_uart_DMA_ATC_cmd_rc76/cmake/stm32cubemx/CMakeFiles/rebuild_cache.dir

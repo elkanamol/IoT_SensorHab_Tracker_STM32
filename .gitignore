@@ -1,0 +1,116 @@
+# Build directories
+/build/
+/Debug/
+/Release/
+/out/
+
+# Generated binary files
+*.o
+*.d
+*.obj
+*.elf
+*.hex
+*.bin
+*.list
+*.map
+*.su
+
+# STM32CubeMX generated files (keep only necessary ones)
+.mxproject
+
+# IDE specific files
+# STM32CubeIDE
+.settings/
+.project
+.cproject
+.launch
+
+# Keil MDK
+*.uvguix.*
+*.uvoptx
+*.uvprojx
+*.scvd
+*.uvguix
+*.bak
+*.ddk
+*.edk
+*.lst
+*.lnp
+*.mpf
+*.mpj
+*.obj
+*.omf
+*.plg
+*.rpt
+*.tmp
+*.__i
+*.crf
+*.o
+*.d
+*.axf
+*.tra
+*.dep
+JLinkLog.txt
+JLinkSettings.ini
+*.iex
+*.htm
+*.sct
+*.map
+
+# IAR EWARM
+*.ewd
+*.ewp
+*.eww
+*.dep
+*.ewt
+*.pbi
+*.pbi.cout
+*.pbd
+*.pbd.browse
+*.pbw
+*.out
+*.sim
+*.log
+*.pbi.xcl
+*.dni
+
+# VS Code
+.vscode/
+*.code-workspace
+.history/
+
+# Eclipse
+.metadata/
+.settings/
+.loadpath
+.recommenders
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~.nib
+local.properties
+.DS_Store
+Thumbs.db
+
+# FreeRTOS specific (keep the source)
+# Nothing to exclude specifically for FreeRTOS source
+
+# Specific to this project
+# Exclude DMA debug logs if any
+*dma_log.txt
+*uart_log.txt
+
+# Keep all source files
+# Core/Src/ and Core/Inc/ are kept
+
+# Exclude any large data files that might be used for testing
+*.dat
+*.csv
+*.log
+
+# Exclude any credentials or sensitive information
+*credentials.h
+*secrets.h
+*private_config.h
