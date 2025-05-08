@@ -103,6 +103,17 @@ extern "C"
     uAT_Result_t uAT_RegisterCommand(const char *cmd, uAT_CommandHandler handler);
 
     /**
+     * @brief  Register a URC handler with high priority
+     * @param  cmd     Null-terminated string to match at start of line
+     * @param  handler Function called when a line beginning with cmd arrives
+     * @return UAT_OK if registered, or appropriate error code on failure:
+     *         - UAT_ERR_INVALID_ARG: If cmd or handler is NULL
+     *         - UAT_ERR_BUSY: If mutex acquisition fails
+     *         - UAT_ERR_RESOURCE: If handler table is full
+     */
+    uAT_Result_t uAT_RegisterURC(const char *cmd, uAT_CommandHandler handler);
+
+    /**
      * @brief  Unregister a previously registered command
      * @note   This function should be called with `uat.handlerMutex` already taken
      * @param  cmd Null-terminated string of the command to unregister

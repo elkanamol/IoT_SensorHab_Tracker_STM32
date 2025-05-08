@@ -389,8 +389,8 @@ static uAT_Result_t uAT_SetupSendReceiveState(const char *expected, char *outBuf
  * 5. Cleans up by unregistering the temporary handler
  * 
  * @param cmd Command to send
- * @param expected Expected response prefix
- * @param outBuf Buffer to store the response
+ * @param expected Expected response prefix till end of line
+ * @param outBuf Buffer to store the response from beginning of the response till end of line of the `expected` prefix
  * @param bufLen Size of outBuf
  * @param timeoutTicks Maximum time to wait for response
  * @return UAT_OK on success, error code otherwise
@@ -493,6 +493,7 @@ static bool uAT_DispatchCommand(const char *line, size_t len)
         // 
         if (strncmp(line, cmd, cmdLen) == 0) {
             const char *args = line + cmdLen;
+            // Skip leading spaces in the 
             while (*args == ' ') {
                 args++;
             }
@@ -570,11 +571,12 @@ void uAT_Task(void *params)
 
         if (len > 0) {
             if (xSemaphoreTake(uat.handlerMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-                // Capture response if in SendReceive mode
+                // Always capture response if in SendReceive mode
                 if (uat.inSendReceive) {
                     uAT_AppendToResponseBuffer((char *)lineBuf, len);
                 }
                 
+                // Dispatch to appropriate handler
                 if (!uAT_DispatchCommand((char *)lineBuf, len)) {
                     // No handler found
                     xSemaphoreGive(uat.handlerMutex);
@@ -610,3 +612,39 @@ uAT_Result_t uAT_Reset(void)
     return UAT_OK;
 }
 
+/**
+ * @brief Register a URC handler with high priority
+ * 
+ * This function registers a command handler for Unsolicited Result Codes (URCs)
+ * with higher priority than regular command handlers by inserting it at the
+ * beginning of the handler array.
+ * 
+ * @param cmd Command string to match
+ * @param handler Function to call when the command is received
+ * @return UAT_OK if successful, error code otherwise
+ */
+uAT_Result_t uAT_RegisterURC(const char *cmd, uAT_CommandHandler handler)
+{
+    if (!cmd || !handler) {
+        return UAT_ERR_INVALID_ARG;
+    }
+
+    if (xSemaphoreTake(uat.handlerMutex, portMAX_DELAY) != pdTRUE)
+        return UAT_ERR_BUSY;
+
+    uAT_Result_t result = UAT_ERR_RESOURCE;
+    if (uat.cmdCount < UAT_MAX_CMD_HANDLERS) {
+        // Shift existing handlers to make room at the beginning
+        for (size_t i = uat.cmdCount; i > 0; i--) {
+            uat.cmdHandlers[i] = uat.cmdHandlers[i-1];
+        }
+        
+        // Insert the URC handler at the beginning
+        uat.cmdHandlers[0] = (uAT_CommandEntry){cmd, handler};
+        uat.cmdCount++;
+        result = UAT_OK;
+    }
+    
+    xSemaphoreGive(uat.handlerMutex);
+    return result;
+}
