@@ -27,6 +27,7 @@
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
 #include "uat_freertos.h" // your parser header
+#include "string.h"
 
 /* USER CODE END Includes */
 
@@ -67,6 +68,21 @@ void creg_handler(const char *args)
 {
   // args might be e.g. ": 1" or ": 0,1"
   printf("[%lu] >>> Network registration URC: %s", HAL_GetTick(), args);
+  if (strcmp(args, ": 1,1") == 0)
+  {
+    printf("[%lu] >>> Network EPS registration successful", HAL_GetTick());
+  }
+}
+
+/* creg_handler: called whenever a line beginning with "+CREG" is received */
+void cgreg_handler(const char *args)
+{
+  // args might be e.g. ": 1" or ": 0,1"
+  printf("[%lu] >>> Network registration URC: %s", HAL_GetTick(), args);
+  if (strcmp(args, ": 1") == 0)
+  {
+    printf("[%lu] >>> Network GPRS registration successful!!", HAL_GetTick());
+  }
 }
 
 // This will be called whenever a line “OK\r\n” arrives.
@@ -75,6 +91,11 @@ void ok_handler(const char *args)
   // args points just past the “OK” in your buffer.
   // Since the default terminator is “\r\n”, args will typically
   // be just “\r\n” (or the empty string if you trimmed CRLF yourself).
+  printf("[%lu] >>> Got OK response%s", HAL_GetTick(), args);
+}
+// This will be called whenever a line “OK\r\n” arrives.
+void error_handler(const char *args)
+{
   printf("[%lu] >>> Got OK response%s", HAL_GetTick(), args);
 }
 
@@ -124,15 +145,25 @@ int main(void)
   }
   printf("uAT parser initialized\n");
 
-
-  result = uAT_RegisterCommand("+CREG", creg_handler);
-  if (result != UAT_OK) {
+  result = uAT_RegisterURC("+CREG", creg_handler);
+  if (result != UAT_OK)
+  {
     printf("Failed to register +CREG handler: %d\n", result);
+  }
+  result = uAT_RegisterURC("+CGREG", cgreg_handler);
+  if (result != UAT_OK)
+  {
+    printf("Failed to register +CGREG handler: %d\n", result);
   }
 
   result = uAT_RegisterCommand("OK", ok_handler);
   if (result != UAT_OK) {
     printf("Failed to register OK handler: %d\n", result);
+  }
+  result = uAT_RegisterCommand("ERROR", error_handler);
+  if (result != UAT_OK)
+  {
+    printf("Failed to register ERROR handler: %d\n", result);
   }
 
   // retval = ATC_SendReceive(&hAtc, "ATI\r\n", 1000, NULL, 1000, 2, "\r\nOK\r\n", "\r\nERROR\r\n");
@@ -236,6 +267,7 @@ int __io_putchar(int ch)
 // printf implementation for UART3.
 int _write(int file, char *ptr, int len)
 {
+  (void)file;
   HAL_UART_Transmit(&huart3, (uint8_t *)ptr, len, 0xFFFF);
   return len;
 }
@@ -243,6 +275,8 @@ int _write(int file, char *ptr, int len)
 // scanf implementation for UART3. (not used in this code)
 int _read(int file, char *ptr, int len)
 {
+  (void)file;
+  (void)len;
   int ch = 0;
   HAL_UART_Receive(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
   HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
@@ -265,6 +299,7 @@ int _read(int file, char *ptr, int len)
 // Example application task
 static void App_Task(void *pvParameters)
 {
+  (void)pvParameters; // ignore unused parameter
   printf("Application task started\r\n");
   char myBuff[1024];
   uAT_Result_t result;
@@ -297,7 +332,7 @@ static void App_Task(void *pvParameters)
     {
       printf("Failed to unregister command\r\n");
     }
-    
+
     result = uAT_SendReceive("ATI", "OK", myBuff, sizeof(myBuff), pdMS_TO_TICKS(1000));
     if (result != UAT_OK) {
       printf("Failed to uAT_SendReceive command: %d\r\n", result);
