@@ -1,252 +1,110 @@
-#ifndef __RC76XX_MQTT_H__
-#define __RC76XX_MQTT_H__
+#ifndef RC76XX_MQTT_H
+#define RC76XX_MQTT_H
 
-#include "uat_freertos.h"
-#include "stdint.h"
-#include "stddef.h"
-#include "stdbool.h"
+#include "FreeRTOS.h"
+#include <stdint.h>
+#include <stdbool.h>
 
+#define RC76XX_IMEI_LEN 16
+#define RC76XX_IP_LEN 16
+#define RC76XX_CLIENTID_LEN 32
+#define RC76XX_TOPIC_LEN 64
+#define RC76XX_PAYLOAD_LEN 128
 
-// Return codes
+/** High-level result codes for the RC76xx driver */
 typedef enum
 {
-    RC76xx_OK = 0,     
-    RC76xx_ERR_INVALID_ARG,
-    RC76xx_ERR_NOT_INITIALIZED,
-    RC76xx_ERR_ALREADY_INITIALIZED,
-    RC76xx_ERR_TIMEOUT,
-    RC76xx_ERR_COMMUNICATION,
-    RC76xx_ERR_BUSY,
-    RC76xx_ERR_NOT_CONNECTED,
-    RC76xx_ERR_RESOURCE,
-    RC76xx_ERR_INVALID_STATE,
-    RC76xx_ERR_MODEM
-} RC76xx_Result_t;
+    RC76XX_OK = 0,
+    RC76XX_ERR_TIMEOUT,
+    RC76XX_ERR_AT,
+    RC76XX_ERR_STATE,
+    RC76XX_ERR_PARSE,
+    RC76XX_ERR_INTERNAL
+} RC76XX_Result_t;
 
-// State machine states
+/** Driver states */
 typedef enum
 {
-    RC76xx_STATE_UNINITIALIZED = 0,  // Driver not initialized 
-    RC76xx_STATE_INITIALIZED,        // Driver initialized but not connected
-    RC76xx_STATE_MODEM_READY,        // Modem responded to basic AT commands
-    RC76xx_STATE_NETWORK_CONFIGURED, // Setting up network parameters
-    RC76xx_STATE_NETWORK_CONNECTING, // Attempting to connect to cellular network
-    RC76xx_STATE_NETWORK_CONNECTED,  // Connected to cellular network
-    RC76xx_STATE_MQTT_CONFIGURED,    // Configuring MQTT client
-    RC76xx_STATE_MQTT_CONNECTING,    // Connecting to MQTT broker, waiting for URC +KMQTT_IND: 1,1
-    RC76xx_STATE_MQTT_CONNECTED,     // Connected to MQTT broker
-    RC76xx_STATE_MQTT_SUBSCRIBING,   // Subscribing to MQTT topics
-    RC76xx_STATE_MQTT_SUBSCRIBED,    // Subscribed to MQTT topics
-    RC76xx_STATE_MQTT_PUBLISHING,    // Publishing a message
-    RC76xx_STATE_MQTT_DISCONNECTING, // Disconnecting from MQTT broker
-    RC76xx_STATE_ERROR               // Error state with recovery mechanism
-} RC76xx_State_t;
+    RC76XX_STATE_RESET = 0,
+    RC76XX_STATE_INITIALIZED,
+    RC76XX_STATE_NETWORK_READY,
+    RC76XX_STATE_MQTT_CONFIGURED,
+    RC76XX_STATE_MQTT_CONNECTED,
+    RC76XX_STATE_ERROR
+} RC76XX_State_t;
 
-// Event types
-typedef enum
+/** Opaque driver handle */
+typedef struct
 {
-    RC76xx_EVENT_STATE_CHANGED = 0,
-    RC76xx_EVENT_NETWORK_REGISTERED,
-    RC76xx_EVENT_NETWORK_LOST,
-    RC76xx_EVENT_MQTT_CONNECTED,
-    RC76xx_EVENT_MQTT_DISCONNECTED,
-    RC76xx_EVENT_MQTT_MESSAGE_RECEIVED,
-    RC76xx_EVENT_MQTT_PUBLISHED,
-    RC76xx_EVENT_ERROR
-} RC76xx_EventType_t;
-
-// MQTT status codes from +KMQTT_IND
-typedef enum {
-    RC76xx_MQTT_STATUS_CONNECTION_ABORTED = 0,
-    RC76xx_MQTT_STATUS_CONNECTED = 1,
-    RC76xx_MQTT_STATUS_SUBSCRIBED = 2,
-    RC76xx_MQTT_STATUS_UNSUBSCRIBED = 3,
-    RC76xx_MQTT_STATUS_PUBLISHED = 4,
-    RC76xx_MQTT_STATUS_GENERIC_ERROR = 5
-} RC76xx_MQTT_Status_t;
-
-// Event structure
-typedef struct {
-    RC76xx_EventType_t type;
-    union {
-        struct {
-            RC76xx_State_t oldState;
-            RC76xx_State_t newState;
-        } stateChange;
-        
-        struct {
-            char topic[64];
-            char message[256];
-            uint8_t qos;
-        } mqttMessage;
-        
-        struct {
-            RC76xx_Result_t code;
-            char message[64];
-        } error;
-    } data;
-} RC76xx_Event_t;
-
-// Event callback type
-typedef void (*RC76xx_EventCallback_t)(const RC76xx_Event_t *event, void *userData);
-
-// State machine context - essential for operation
-typedef struct {
-    RC76xx_State_t currentState;
-    RC76xx_State_t previousState;
-    uint32_t stateEntryTime;
-    uint32_t stateTimeout;
-    bool errorRecoveryMode;
-    uint8_t errorRetryCount;
-    RC76xx_Result_t lastError;
-} RC76xx_StateMachine_t;
-
-// Network configuration - minimal required fields
-typedef struct {
-    char *apn;               // Access Point Name
-    char *username;          // APN username (can be NULL)
-    char *password;          // APN password (can be NULL)
-    char *ip_address;        // IP address (for status)
-    char *port;              // Port (for status)
-    uint8_t pdpContextId;    // PDP context ID (1-16)
-    char *ipType;            // "IP" or "IPV6" or "IPV4V6"
-    
-} RC76xx_Network_Config_t;
-
-// SSL/TLS configuration
-typedef struct {
-    uint8_t securityMethod;  // 0=No security, 1=TLS
-    uint8_t cipherIndex;     // Cipher suite profile index
-    uint8_t authMode;        // Authentication mode
-    uint16_t negotiationBitmask; // TLS version negotiation bitmask
-    uint8_t encryptAlgoBitmask;  // Encryption algorithm bitmask
-    uint8_t certValidLevel;      // Certificate validation level
-    uint8_t caCertIndex;         // CA certificate index
-    uint8_t clientCertIndex;     // Client certificate index
-    char *alpnList;              // ALPN protocol list
-} RC76xx_SSL_Config_t;
-
-// MQTT configuration - minimal required fields
-typedef struct {
-    char *server;            // MQTT broker server
-    char *port;              // MQTT broker port
-    char *client_id;         // MQTT client ID
-    char *username;          // MQTT username
-    char *password;          // MQTT password
-    char *topic;             // Default topic
-    char *message;           // Default message
-    uint16_t qos;            // Quality of Service
-    uint16_t keepalive;      // Keepalive interval in seconds
-    uint16_t timeout;        // Connection timeout
-    uint16_t retry_count;    // Number of retries
-    uint16_t retry_delay;    // Delay between retries
-    
-    uint8_t sessionId;       // MQTT session ID (assigned by driver)
-    uint8_t mqttVersion;     // 3=MQTT 3.1, 4=MQTT 3.1.1
-    bool cleanSession;       // Clean session flag
-    bool useTls;             // Whether to use TLS
-    
-    // Will message configuration
-    bool willFlag;           // Enable Last Will and Testament
-    char *willTopic;         // Will topic
-    char *willMessage;       // Will message
-    bool willRetained;       // Will retained flag
-    uint8_t willQos;         // Will QoS
-    
-    // SSL/TLS configuration
-    uint8_t securityMethod;  // 0=No security, 1=TLS
-    uint8_t cipherIndex;     // Cipher suite profile index
-    char *alpnList;          // ALPN protocol list
-    
-} RC76xx_MQTT_Config_t;
-
-// Main driver handle
-typedef struct {
-    RC76xx_StateMachine_t stateMachine;
-    RC76xx_MQTT_Config_t mqttConfig;
-    RC76xx_Network_Config_t networkConfig;
-    
-    // Event callback
-    void (*eventCallback)(RC76xx_EventType_t event, void *data, void *userData);
-    void *userData;
-    
-    // Internal state
-    bool networkRegistered;
-    int8_t signalQuality;
-    char lastErrorMessage[64];
-    
-    // UART handle
-    void *uartHandle;
-} RC76xx_Handle_t;
-
-// Core API functions - essential functions only
-
-RC76xx_Result_t RC76xx_Check_device_ready(RC76xx_Handle_t *handle);
-RC76xx_Result_t RC76xx_Initialize(RC76xx_Handle_t *handle);
-RC76xx_Result_t RC76xx_Deinitialize(RC76xx_Handle_t *handle);
-RC76xx_Result_t RC76xx_SetNetworkConfig(RC76xx_Handle_t *handle, RC76xx_Network_Config_t *networkConfig);
-RC76xx_Result_t RC76xx_SetMQTTConfig(RC76xx_Handle_t *handle, RC76xx_MQTT_Config_t *mqttConfig);
-RC76xx_Result_t RC76xx_Connect(RC76xx_Handle_t *handle);
-RC76xx_Result_t RC76xx_Disconnect(RC76xx_Handle_t *handle);
-RC76xx_Result_t RC76xx_Subscribe(RC76xx_Handle_t *handle, const char *topic, uint8_t qos);
-RC76xx_Result_t RC76xx_Unsubscribe(RC76xx_Handle_t *handle, const char *topic);
-RC76xx_Result_t RC76xx_Publish(RC76xx_Handle_t *handle, const char *topic, const char *message, uint8_t qos);
-RC76xx_Result_t RC76xx_GetState(RC76xx_Handle_t *handle, RC76xx_State_t *state);
-
-// State machine function
-RC76xx_Result_t RC76xx_SetState(RC76xx_Handle_t *handle, RC76xx_State_t newState, uint32_t timeout);
+    RC76XX_State_t state;
+    char imei[RC76XX_IMEI_LEN];
+    char ip[RC76XX_IP_LEN];
+    int cnx_id; // ID returned by +KCNXCFG
+    int mqtt_cfg_id; // ID returned by +KMQTTCFG
+    char client_id[RC76XX_CLIENTID_LEN];
+} RC76XX_Handle_t;
 
 /**
- * @brief Notifies application of events through callback
- *
- * @param handle Pointer to RC76xx handle
- * @param eventType Type of event
- * @param data Event-specific data
- * @return RC76xx_Result_t Result code
+ * @brief  Initialize the modem, get IMEI, disable echo.
+ * @param  h  driver handle (uninitialized)
+ * @return RC76XX_OK or error
  */
-static RC76xx_Result_t RC76xx_NotifyEvent(RC76xx_Handle_t *handle,
-                                          RC76xx_EventType_t eventType,
-                                          void *data);
-/**
- * @brief Parses MQTT session ID from KMQTTCFG response
- *
- * Uses uAT_ParseInt() to extract session ID from +KMQTTCFG response
- *
- * @param response Response string from AT command
- * @param sessionId Pointer to store session ID
- * @return bool True if successful, false otherwise
- */
-static bool RC76xx_ParseSessionId(const char *response, uint8_t *sessionId);
+RC76XX_Result_t RC76XX_Initialize(RC76XX_Handle_t *h);
 
 /**
- * @brief Parses network registration status
- *
- * Uses uAT_ParseInt() to extract registration status from +CREG/+CEREG response
- *
- * @param response Response string from AT command
- * @param status Pointer to store registration status
- * @return bool True if successful, false otherwise
+ * @brief  Attach to network, configure PDP context, get IP.
+ * @param  h
+ * @return RC76XX_OK or error
  */
-static bool RC76xx_ParseRegistrationStatus(const char *response, int *status);
+RC76XX_Result_t RC76XX_NetworkAttach(RC76XX_Handle_t *h);
 
 /**
- * @brief Parses IP address from CGPADDR response
- *
- * Uses uAT_ParseIPAddress() to extract IP address from +CGPADDR response
- *
- * @param response Response string from AT command
- * @param ipAddress Buffer to store IP address
- * @param bufferSize Size of buffer
- * @return bool True if successful, false otherwise
+ * @brief  Configure MQTT parameters (server, port, clientID, SSL).
+ * @param  h
+ * @param  host   MQTT broker DNS or IP
+ * @param  port
+ * @param  clientID
+ * @param  useTLS  true to enable SSL/TLS
+ * @return RC76XX_OK or error
  */
-static bool RC76xx_ParseIPAddress(const char *response, char *ipAddress, size_t bufferSize);
+RC76XX_Result_t RC76XX_ConfigMQTT(RC76XX_Handle_t *h,
+                                  const char *host,
+                                  uint16_t port,
+                                  const char *clientID,
+                                  bool useTLS);
 
-static RC76xx_Result_t RC76xx_RegisterURCHandlers(RC76xx_Handle_t *handle);
-/* These functions should be internal (static) in the implementation file, not in the header */
-// void RC76xx_ExecuteStateEntryActions(RC76xx_Handle_t *handle, RC76xx_State_t state);
-// void RC76xx_StateMonitorTask(void *pvParameters);
-// void RC76xx_HandleStateTimeout(RC76xx_Handle_t *handle, RC76xx_State_t state);
-// void RC76xx_ExecuteStateActions(RC76xx_Handle_t *handle, RC76xx_State_t state);
-// void RC76xx_SetError(RC76xx_Handle_t *handle, RC76xx_Result_t errorCode, const char *errorMessage);
+/**
+ * @brief  Connect (open) the MQTT session.
+ * @param  h
+ * @return RC76XX_OK or error
+ */
+RC76XX_Result_t RC76XX_ConnectMQTT(RC76XX_Handle_t *h);
 
-#endif // __RC76XX_MQTT_H__
+/**
+ * @brief  Publish a message.
+ * @param  h
+ * @param  topic
+ * @param  payload
+ * @return RC76XX_OK or error
+ */
+RC76XX_Result_t RC76XX_Publish(RC76XX_Handle_t *h,
+                               const char *topic,
+                               const char *payload);
+
+/**
+ * @brief  Subscribe to a topic.
+ * @param  h
+ * @param  topic
+ * @return RC76XX_OK or error
+ */
+RC76XX_Result_t RC76XX_Subscribe(RC76XX_Handle_t *h,
+                                 const char *topic);
+
+/**
+ * @brief  Disconnect MQTT and tear down.
+ * @param  h
+ * @return RC76XX_OK or error
+ */
+RC76XX_Result_t RC76XX_Disconnect(RC76XX_Handle_t *h);
+
+#endif // RC76XX_MQTT_H

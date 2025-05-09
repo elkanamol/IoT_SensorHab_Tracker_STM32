@@ -25,10 +25,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "rc76xx_mqtt.h"
 #include "stdio.h"
 #include "uat_freertos.h" // your parser header
 #include "string.h"
-#include "rc76xx_mqtt.h"
 
 /* USER CODE END Includes */
 
@@ -51,7 +51,7 @@
 
 /* USER CODE BEGIN PV */
 extern UART_HandleTypeDef huart2;
-extern RC76xx_Handle_t mqtt_handle;
+static RC76XX_Handle_t mqttHandle;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -59,7 +59,7 @@ void SystemClock_Config(void);
 void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
 static void App_Task(void *pvParameters);
-static void mqtt_task(void *pvParameters);
+static void MQTT_Task(void *pvParameters);
 
 /* USER CODE END PFP */
 
@@ -193,13 +193,13 @@ int main(void)
   //             NULL,
   //             tskIDLE_PRIORITY + 1,
   //             NULL);
-  
-  xTaskCreate(mqtt_task,
-    "mqtt_task",
-    512 * 2,
-    NULL,
-    tskIDLE_PRIORITY + 1,
-    NULL);
+
+  xTaskCreate(MQTT_Task,
+              "MQTT_Task",
+              512 * 2,
+              NULL,
+              tskIDLE_PRIORITY + 1,
+              NULL);
 
   /* Start scheduler */
   osKernelStart();
@@ -307,49 +307,93 @@ int _read(int file, char *ptr, int len)
   return 1;
 }
 
-static void mqtt_task(void *pvParameters)
+/**
+ * @brief  MQTT_Task
+ *         Runs the RC76xx MQTT state machine:
+ *         Initialize → NetworkAttach → ConfigMQTT → ConnectMQTT → loop Publish/Subscribe
+ */
+static void MQTT_Task(void *argument)
 {
-  RC76xx_Handle_t mqtt_handle; // ignore unused parameter
-  printf("MQTT task started\r\n");
-  char myBuff[1024];
-  uAT_Result_t result;
-  RC76xx_Result_t mqtt_result;
-  char *mqtt_topic = "test/topic";
-  char *mqtt_payload = "Hello, MQTT!";
-  char *mqtt_client_id = "my_client_id";
+  RC76XX_Result_t res;
+  TickType_t delay = pdMS_TO_TICKS(10000);
 
-
-  mqtt_result = RC76xx_Initialize(&mqtt_handle);
-  if (mqtt_result != RC76xx_OK)
+  /* 1) Initialize modem */
+  printf("MQTT_Task: Initializing modem...\r\n");
+  res = RC76XX_Initialize(&mqttHandle);
+  if (res != RC76XX_OK)
   {
-    printf("Failed to initialize MQTT: %d\r\n", mqtt_result);
+    printf("Init failed: %d\r\n", res);
+    vTaskSuspend(NULL);
   }
-  mqtt_result = RC76xx_Connect(&mqtt_handle);
-  if (mqtt_result != RC76xx_OK)
+  printf("Initialized, IMEI=%s\r\n", mqttHandle.imei);
+
+  /* 2) Attach to network & get IP */
+  printf("Attaching to network...\r\n");
+  res = RC76XX_NetworkAttach(&mqttHandle);
+  if (res != RC76XX_OK)
   {
-    printf("Failed to connect to MQTT: %d\r\n", mqtt_result);
+    printf("NetworkAttach failed: %d\r\n", res);
+    vTaskSuspend(NULL);
   }
+  printf("Network ready, IP=%s\r\n", mqttHandle.ip);
 
+  /* 3) Configure MQTT */
+  const char *broker = "68b382e596d744bbb0fee7de10e18d83.s1.eu.hivemq.cloud";
+  const char *clientID = "elkanam";
+  printf("Configuring MQTT %s:%u, ClientID=%s...\r\n",
+         broker, 1883, clientID);
+  res = RC76XX_ConfigMQTT(&mqttHandle, broker, 1883, clientID, false);
+  if (res != RC76XX_OK)
+  {
+    printf("ConfigMQTT failed: %d\r\n", res);
+    vTaskSuspend(NULL);
+  }
+  printf("MQTT configured, cfg_id=%d\r\n", mqttHandle.mqtt_cfg_id);
 
+  /* 4) Connect MQTT */
+  printf("Connecting MQTT...\r\n");
+  res = RC76XX_ConnectMQTT(&mqttHandle);
+  if (res != RC76XX_OK)
+  {
+    printf("ConnectMQTT failed: %d\r\n", res);
+    vTaskSuspend(NULL);
+  }
+  printf("MQTT connected\r\n");
+
+  /* 5) In a loop, publish and subscribe */
   for (;;)
   {
-    // mqtt_result = RC76xx_Initialize(&mqtt_handle);
-    // if (mqtt_result != RC76xx_OK)
-    // {
-    //   printf("[mainloop] Failed to initialize MQTT: %d\r\n", mqtt_result);
-    // }
-    // vTaskDelay(pdMS_TO_TICKS(10000));
-
-    mqtt_result = RC76xx_Connect(&mqtt_handle);
-    if (mqtt_result != RC76xx_OK)
+    /* Subscribe to a topic */
+    const char *subTopic = "stm32/sub";
+    printf("Subscribing to %s...\r\n", subTopic);
+    res = RC76XX_Subscribe(&mqttHandle, subTopic);
+    if (res == RC76XX_OK)
     {
-      printf("Failed to connect to MQTT: %d\r\n", mqtt_result);
+      printf("Subscribed to %s\r\n", subTopic);
     }
-    vTaskDelay(pdMS_TO_TICKS(10000));
+    else
+    {
+      printf("Subscribe failed: %d\r\n", res);
+    }
+
+    /* Publish a message */
+    const char *pubTopic = "stm32/pub";
+    const char *payload = "{\"temp\":25}";
+    printf("Publishing to %s: %s\r\n", pubTopic, payload);
+    res = RC76XX_Publish(&mqttHandle, pubTopic, payload);
+    if (res == RC76XX_OK)
+    {
+      printf("Publish OK\r\n");
+    }
+    else
+    {
+      printf("Publish failed: %d\r\n", res);
+    }
+
+    /* Wait before next cycle */
+    vTaskDelay(delay);
   }
-
 }
-
 // Example application task
 static void App_Task(void *pvParameters)
 {
