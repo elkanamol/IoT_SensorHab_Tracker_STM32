@@ -141,9 +141,11 @@ RC76XX_Result_t RC76XX_ConfigMQTT(RC76XX_Handle_t *h,
                                   const char *host,
                                   uint16_t port,
                                   const char *clientID,
+                                  const char *topic,
                                   const char *username,
                                   const char *password,
-                                  bool useTLS)
+                                  bool useTLS,
+                                  uint16_t keepAliveInterval)
 {
     if (!h || h->state != RC76XX_STATE_NETWORK_READY)
     {
@@ -152,28 +154,13 @@ RC76XX_Result_t RC76XX_ConfigMQTT(RC76XX_Handle_t *h,
 
     char cmd[256], resp[64];
 
-    // AT+KMQTTCFG=<cnx_cnf>,<secure>,<server>,<port>,<version>,<client_id>,<keepalive>,<clean>,<will_flag>
-    // We'll use: cnx_cnf=1, version=4, keepalive=60, clean=1, will_flag=0
-    // AT+KMQTTCFG=0,broker.hivemq.com,1883,4,"QCX216",120,1,1,"home/LWTMessage "," qcx216 offline ",1,0,,,,""
-
-    /* AT+KMQTTCFG=1,"68b382e596d744bbb0fee7de10e18d83.s1.eu.hivemq.cloud",8883,4,"rc7120",120,1,0,1,"home/LWTMessage","qcx216 offline",1,0,"rc7120","Telad@05",,
-                   68b382e596d744bbb0fee7de10e18d83
-    AT+KMQTTCFG=1,"68b382e596d744bbb0fee7de10e18d83.s1.eu.hivemq.cloud",8883,4,"rc7120",120,1,0,,,1,0,"rc7120","Telad@05",,
-    AT+KMQTTCFG=<secure>,<server>,<port>,<version>,<client_id>[,[<keepalive_interval>],[<clean_session>],<will_flag>,<topic_name>,
-<message>,<retained>,<qos>[,[<username>],[<password>]],
-[<cipher_index>],[<alpn_list>]]
-AT+KMQTTSUB=1,"stm32/sub1",0
-AT+KMQTTCFG=0,broker.hivemq.com,1883,4,"QCX216",120,1,1,"home/LWTMessage","qcx216 offline",1,0,,,,""
-AT+KMQTTCFG=0,"broker.hivemq.com",1883,4,"QCX216",120,1,1,"home/LWTMessage","qc216_offline",1,0,,,,""
-*/
     snprintf(cmd, sizeof(cmd),
-             "AT+KMQTTCFG=%d,%s,%u,4,\"%s\",120,1,1,\"home/LWTMessage\",\"qc216_offline\",1,0,,,,\"\"",
+             "AT+KMQTTCFG=%d,%s,%u,4,\"%s\",%u,1,0,\"%s\",\"field1=0\",1,0,\"%s\",\"%s\",,\"\"",
              useTLS ? 1 : 0,
              host,
              port,
-             clientID);
+             clientID, keepAliveInterval, topic, username, password);
 
-    // 1) wait for +KMQTTCFG: <session_id>
     if (uAT_SendReceive(cmd, "OK", resp, sizeof(resp), CMD_TIMEOUT) != UAT_OK)
     {
         return RC76XX_ERR_AT;
@@ -182,17 +169,10 @@ AT+KMQTTCFG=0,"broker.hivemq.com",1883,4,"QCX216",120,1,1,"home/LWTMessage","qc2
     {
         return RC76XX_ERR_AT;
     }
-    // parse session_id
     if (!uAT_ParseInt(resp, "+KMQTTCFG:", ',', &h->mqtt_cfg_id))
     {
         return RC76XX_ERR_PARSE;
     }
-
-    // // 2) wait for final OK
-    // if (uAT_SendReceive("", "OK", resp, sizeof(resp), CMD_TIMEOUT) != UAT_OK)
-    // {
-    //     return RC76XX_ERR_AT;
-    // }
 
     h->state = RC76XX_STATE_MQTT_CONFIGURED;
     return RC76XX_OK;
@@ -311,3 +291,4 @@ RC76XX_Result_t RC76XX_Disconnect(RC76XX_Handle_t *h)
     h->state = RC76XX_STATE_RESET;
     return RC76XX_OK;
 }
+

@@ -82,9 +82,11 @@ RC76XX_Result_t RC76XX_ConfigMQTT(RC76XX_Handle_t *h,
                                   const char *host,
                                   uint16_t port,
                                   const char *clientID,
+                                  const char *topic,
                                   const char *username,
                                   const char *password,
-                                  bool useTLS);
+                                  bool useTLS,
+                                  uint16_t keepAliveInterval);
 
 /**
  * @brief  Connect (open) the MQTT session.

@@ -332,7 +332,7 @@ int _read(int file, char *ptr, int len)
 static void MQTT_Task(void *argument)
 {
   RC76XX_Result_t res;
-  TickType_t delay = pdMS_TO_TICKS(10000);
+  TickType_t delay = pdMS_TO_TICKS(20000);
 
   /* 0) Reset the modem */
   printf("MQTT_Task: Resetting modem...\r\n");
@@ -376,12 +376,12 @@ static void MQTT_Task(void *argument)
   const char *user = SECRET_MQTT_USERNAME;
   const char *pass = SECRET_MQTT_PASSWORD;
   const char *topic = "channels/2956054/publish/";
-  const char *payload = "field1";
+  const char *payload_prefix = "field1=";
 
 
   printf("Configuring MQTT %s:%u, ClientID=%s...\r\n",
                                                      broker, 1883, clientID);
-  res = RC76XX_ConfigMQTT(&mqttHandle, broker, port, clientID, user, pass, false);
+  res = RC76XX_ConfigMQTT(&mqttHandle, broker, port, clientID, topic, user, pass, false, 120);
   if (res != RC76XX_OK)
   {
     printf("ConfigMQTT failed: %d\r\n", res);
@@ -416,12 +416,12 @@ static void MQTT_Task(void *argument)
   printf("Registered +KMQTT_DATA handler\r\n");
   /* Subscribe to a topic */
   
-  const char *subTopic = "home/LWTMessage";
-  printf("Subscribing to %s...\r\n", subTopic);
-  res = RC76XX_Subscribe(&mqttHandle, subTopic);
+  // const char *subTopic = "home/LWTMessage";
+  printf("Subscribing to %s...\r\n", topic);
+  res = RC76XX_Subscribe(&mqttHandle, topic);
   if (res == RC76XX_OK)
   {
-    printf("Subscribed to %s\r\n", subTopic);
+    printf("Subscribed to %s\r\n", topic);
   }
   else
   {
@@ -433,11 +433,11 @@ static void MQTT_Task(void *argument)
 
     uint32_t now = HAL_GetTick();
     /* Publish a message */
-    const char *pubTopic = "home/LWTMessage";
+    // const char *pubTopic = "home/LWTMessage";
     char payload[100] = {""};
-    sprintf(payload, "Test %lu", now);
-    printf("Publishing to %s: %s\r\n", pubTopic, payload);
-    res = RC76XX_Publish(&mqttHandle, pubTopic, payload);
+    sprintf(payload, "%s%lu", payload_prefix, now);
+    printf("Publishing to %s: %s\r\n", topic, payload);
+    res = RC76XX_Publish(&mqttHandle, topic, payload);
     if (res == RC76XX_OK)
     {
       printf("Publish OK\r\n");
@@ -451,6 +451,7 @@ static void MQTT_Task(void *argument)
     vTaskDelay(delay);
   }
 }
+
 // Example application task
 static void App_Task(void *pvParameters)
 {
