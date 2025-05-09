@@ -179,8 +179,8 @@ typedef struct {
     void *uartHandle;
 } RC76xx_Handle_t;
 
-
 // Core API functions - essential functions only
+
 RC76xx_Result_t RC76xx_Check_device_ready(RC76xx_Handle_t *handle);
 RC76xx_Result_t RC76xx_Initialize(RC76xx_Handle_t *handle);
 RC76xx_Result_t RC76xx_Deinitialize(RC76xx_Handle_t *handle);
@@ -196,6 +196,52 @@ RC76xx_Result_t RC76xx_GetState(RC76xx_Handle_t *handle, RC76xx_State_t *state);
 // State machine function
 RC76xx_Result_t RC76xx_SetState(RC76xx_Handle_t *handle, RC76xx_State_t newState, uint32_t timeout);
 
+/**
+ * @brief Notifies application of events through callback
+ *
+ * @param handle Pointer to RC76xx handle
+ * @param eventType Type of event
+ * @param data Event-specific data
+ * @return RC76xx_Result_t Result code
+ */
+static RC76xx_Result_t RC76xx_NotifyEvent(RC76xx_Handle_t *handle,
+                                          RC76xx_EventType_t eventType,
+                                          void *data);
+/**
+ * @brief Parses MQTT session ID from KMQTTCFG response
+ *
+ * Uses uAT_ParseInt() to extract session ID from +KMQTTCFG response
+ *
+ * @param response Response string from AT command
+ * @param sessionId Pointer to store session ID
+ * @return bool True if successful, false otherwise
+ */
+static bool RC76xx_ParseSessionId(const char *response, uint8_t *sessionId);
+
+/**
+ * @brief Parses network registration status
+ *
+ * Uses uAT_ParseInt() to extract registration status from +CREG/+CEREG response
+ *
+ * @param response Response string from AT command
+ * @param status Pointer to store registration status
+ * @return bool True if successful, false otherwise
+ */
+static bool RC76xx_ParseRegistrationStatus(const char *response, int *status);
+
+/**
+ * @brief Parses IP address from CGPADDR response
+ *
+ * Uses uAT_ParseIPAddress() to extract IP address from +CGPADDR response
+ *
+ * @param response Response string from AT command
+ * @param ipAddress Buffer to store IP address
+ * @param bufferSize Size of buffer
+ * @return bool True if successful, false otherwise
+ */
+static bool RC76xx_ParseIPAddress(const char *response, char *ipAddress, size_t bufferSize);
+
+static RC76xx_Result_t RC76xx_RegisterURCHandlers(RC76xx_Handle_t *handle);
 /* These functions should be internal (static) in the implementation file, not in the header */
 // void RC76xx_ExecuteStateEntryActions(RC76xx_Handle_t *handle, RC76xx_State_t state);
 // void RC76xx_StateMonitorTask(void *pvParameters);

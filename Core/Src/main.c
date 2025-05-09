@@ -28,6 +28,7 @@
 #include "stdio.h"
 #include "uat_freertos.h" // your parser header
 #include "string.h"
+#include "rc76xx_mqtt.h"
 
 /* USER CODE END Includes */
 
@@ -50,7 +51,7 @@
 
 /* USER CODE BEGIN PV */
 extern UART_HandleTypeDef huart2;
-
+extern RC76xx_Handle_t mqtt_handle;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -58,6 +59,8 @@ void SystemClock_Config(void);
 void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
 static void App_Task(void *pvParameters);
+static void mqtt_task(void *pvParameters);
+
 /* USER CODE END PFP */
 
 // /* Private user code ---------------------------------------------------------*/
@@ -183,13 +186,21 @@ int main(void)
               tskIDLE_PRIORITY + 1,
               NULL);
 
-  // (Optional) your other application tasks
-  xTaskCreate(App_Task,
-              "AppTask",
-              512,
-              NULL,
-              tskIDLE_PRIORITY + 1,
-              NULL);
+  // // (Optional) your other application tasks
+  // xTaskCreate(App_Task,
+  //             "AppTask",
+  //             512,
+  //             NULL,
+  //             tskIDLE_PRIORITY + 1,
+  //             NULL);
+  
+  xTaskCreate(mqtt_task,
+    "mqtt_task",
+    512 * 2,
+    NULL,
+    tskIDLE_PRIORITY + 1,
+    NULL);
+
   /* Start scheduler */
   osKernelStart();
 
@@ -294,6 +305,49 @@ int _read(int file, char *ptr, int len)
   *ptr = ch;
 
   return 1;
+}
+
+static void mqtt_task(void *pvParameters)
+{
+  RC76xx_Handle_t mqtt_handle; // ignore unused parameter
+  printf("MQTT task started\r\n");
+  char myBuff[1024];
+  uAT_Result_t result;
+  RC76xx_Result_t mqtt_result;
+  char *mqtt_topic = "test/topic";
+  char *mqtt_payload = "Hello, MQTT!";
+  char *mqtt_client_id = "my_client_id";
+
+
+  mqtt_result = RC76xx_Initialize(&mqtt_handle);
+  if (mqtt_result != RC76xx_OK)
+  {
+    printf("Failed to initialize MQTT: %d\r\n", mqtt_result);
+  }
+  mqtt_result = RC76xx_Connect(&mqtt_handle);
+  if (mqtt_result != RC76xx_OK)
+  {
+    printf("Failed to connect to MQTT: %d\r\n", mqtt_result);
+  }
+
+
+  for (;;)
+  {
+    // mqtt_result = RC76xx_Initialize(&mqtt_handle);
+    // if (mqtt_result != RC76xx_OK)
+    // {
+    //   printf("[mainloop] Failed to initialize MQTT: %d\r\n", mqtt_result);
+    // }
+    // vTaskDelay(pdMS_TO_TICKS(10000));
+
+    mqtt_result = RC76xx_Connect(&mqtt_handle);
+    if (mqtt_result != RC76xx_OK)
+    {
+      printf("Failed to connect to MQTT: %d\r\n", mqtt_result);
+    }
+    vTaskDelay(pdMS_TO_TICKS(10000));
+  }
+
 }
 
 // Example application task

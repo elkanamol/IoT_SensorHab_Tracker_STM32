@@ -49,6 +49,8 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Core/Src/uat_freertos.c
+    Core/Src/uat_parser.c
+    Core/Src/rc76xx_mqtt.c
 )
 
 # Add include paths
