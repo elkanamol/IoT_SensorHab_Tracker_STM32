@@ -29,6 +29,7 @@
 #include "stdio.h"
 #include "uat_freertos.h" // your parser header
 #include "string.h"
+#include "mqtt_secrets.h"
 
 /* USER CODE END Includes */
 
@@ -87,6 +88,26 @@ void cgreg_handler(const char *args)
     printf("[%lu] >>> Network GPRS registration successful!!", HAL_GetTick());
   }
 }
+/* creg_handler: called whenever a line beginning with "+CREG" is received */
+void mqtt_data_handler(const char *args)
+{
+  // +KMQTT_DATA: 0,"home/LWTMessage","Test 40447"
+  printf("[%lu] >>> MQTT data URC: %s", HAL_GetTick(), args);
+  // extract the data, "home/LWTMessage" => topic, "Test 40447" => payload
+  char topic[100] = {""};
+  char payload[100] = {""};
+  sscanf(args, "0,%[^,],%[^,]", topic, payload);
+  printf("[%lu] >>> MQTT data topic: %s, payload: %s", HAL_GetTick(), topic, payload);
+}
+
+
+// reset handler to handel the reset URC from the module
+void reset_handler(const char *args)
+{
+  mqttHandle.state = RC76XX_STATE_RESET;
+  printf("[%lu] >>> RC76xx modem has reset!!, state transition to RC76XX_STATE_RESET:", HAL_GetTick());
+}
+
 
 // This will be called whenever a line “OK\r\n” arrives.
 void ok_handler(const char *args)
@@ -148,26 +169,22 @@ int main(void)
   }
   printf("uAT parser initialized\n");
 
-  result = uAT_RegisterURC("+CREG", creg_handler);
-  if (result != UAT_OK)
-  {
-    printf("Failed to register +CREG handler: %d\n", result);
-  }
-  result = uAT_RegisterURC("+CGREG", cgreg_handler);
-  if (result != UAT_OK)
-  {
-    printf("Failed to register +CGREG handler: %d\n", result);
-  }
 
-  result = uAT_RegisterCommand("OK", ok_handler);
-  if (result != UAT_OK) {
-    printf("Failed to register OK handler: %d\n", result);
-  }
-  result = uAT_RegisterCommand("ERROR", error_handler);
-  if (result != UAT_OK)
-  {
-    printf("Failed to register ERROR handler: %d\n", result);
-  }
+  // result = uAT_RegisterURC("+CGREG", cgreg_handler);
+  // if (result != UAT_OK)
+  // {
+  //   printf("Failed to register +CGREG handler: %d\n", result);
+  // }
+
+  // result = uAT_RegisterCommand("OK", ok_handler);
+  // if (result != UAT_OK) {
+  //   printf("Failed to register OK handler: %d\n", result);
+  // }
+  // result = uAT_RegisterCommand("ERROR", error_handler);
+  // if (result != UAT_OK)
+  // {
+  //   printf("Failed to register ERROR handler: %d\n", result);
+  // }
 
   // retval = ATC_SendReceive(&hAtc, "ATI\r\n", 1000, NULL, 1000, 2, "\r\nOK\r\n", "\r\nERROR\r\n");
   // printf("ATC_SendReceive returned %d\n", retval);
@@ -317,6 +334,17 @@ static void MQTT_Task(void *argument)
   RC76XX_Result_t res;
   TickType_t delay = pdMS_TO_TICKS(10000);
 
+  /* 0) Reset the modem */
+  printf("MQTT_Task: Resetting modem...\r\n");
+  res = RC76XX_Reset(&mqttHandle);
+  if (res != RC76XX_OK)
+  {
+    printf("Reset failed: %d\r\n", res);
+    vTaskSuspend(NULL);
+  }
+  vTaskDelay(delay);
+
+
   /* 1) Initialize modem */
   printf("MQTT_Task: Initializing modem...\r\n");
   res = RC76XX_Initialize(&mqttHandle);
@@ -337,12 +365,23 @@ static void MQTT_Task(void *argument)
   }
   printf("Network ready, IP=%s\r\n", mqttHandle.ip);
 
-  /* 3) Configure MQTT */
-  const char *broker = "68b382e596d744bbb0fee7de10e18d83.s1.eu.hivemq.cloud";
-  const char *clientID = "elkanam";
+  // /* 3) Configure MQTT */
+  // const char *broker = "broker.hivemq.com";
+  // const char *clientID = "QCX216";
+  // const char *user = "";
+  // const char *pass = "";
+  const char *broker = "mqtt3.thingspeak.com";
+  const port = 1883;
+  const char *clientID = SECRET_MQTT_CLIENT_ID;
+  const char *user = SECRET_MQTT_USERNAME;
+  const char *pass = SECRET_MQTT_PASSWORD;
+  const char *topic = "channels/2956054/publish/";
+  const char *payload = "field1";
+
+
   printf("Configuring MQTT %s:%u, ClientID=%s...\r\n",
-         broker, 1883, clientID);
-  res = RC76XX_ConfigMQTT(&mqttHandle, broker, 1883, clientID, false);
+                                                     broker, 1883, clientID);
+  res = RC76XX_ConfigMQTT(&mqttHandle, broker, port, clientID, user, pass, false);
   if (res != RC76XX_OK)
   {
     printf("ConfigMQTT failed: %d\r\n", res);
@@ -358,27 +397,45 @@ static void MQTT_Task(void *argument)
     printf("ConnectMQTT failed: %d\r\n", res);
     vTaskSuspend(NULL);
   }
+  vTaskDelay(delay);
   printf("MQTT connected\r\n");
+  // +KMQTT_DATA: 0,"home/LWTMessage","Test 40447"
+  uAT_Result_t result = uAT_RegisterURC("+KMQTT_DATA:", mqtt_data_handler);
+  if (result != UAT_OK)
+  {
+    printf("Failed to register +CREG handler: %d\n", result);
+  }
+  printf("Registered +KMQTT_DATA handler\r\n");
 
+
+  result = uAT_RegisterURC("+QCEUICCSUPPORT:0", reset_handler);
+  if (result != UAT_OK)
+  {
+    printf("Failed to register +CREG handler: %d\n", result);
+  }
+  printf("Registered +KMQTT_DATA handler\r\n");
+  /* Subscribe to a topic */
+  
+  const char *subTopic = "home/LWTMessage";
+  printf("Subscribing to %s...\r\n", subTopic);
+  res = RC76XX_Subscribe(&mqttHandle, subTopic);
+  if (res == RC76XX_OK)
+  {
+    printf("Subscribed to %s\r\n", subTopic);
+  }
+  else
+  {
+    printf("Subscribe failed: %d\r\n", res);
+  }
   /* 5) In a loop, publish and subscribe */
   for (;;)
   {
-    /* Subscribe to a topic */
-    const char *subTopic = "stm32/sub";
-    printf("Subscribing to %s...\r\n", subTopic);
-    res = RC76XX_Subscribe(&mqttHandle, subTopic);
-    if (res == RC76XX_OK)
-    {
-      printf("Subscribed to %s\r\n", subTopic);
-    }
-    else
-    {
-      printf("Subscribe failed: %d\r\n", res);
-    }
 
+    uint32_t now = HAL_GetTick();
     /* Publish a message */
-    const char *pubTopic = "stm32/pub";
-    const char *payload = "{\"temp\":25}";
+    const char *pubTopic = "home/LWTMessage";
+    char payload[100] = {""};
+    sprintf(payload, "Test %lu", now);
     printf("Publishing to %s: %s\r\n", pubTopic, payload);
     res = RC76XX_Publish(&mqttHandle, pubTopic, payload);
     if (res == RC76XX_OK)

@@ -40,7 +40,7 @@
 
 // for standard uAT, change these to match your needs
 #define UAT_RX_BUFFER_SIZE 256     // size of RX buffer
-#define UAT_TX_BUFFER_SIZE 128     // size of TX buffer, if using with IP or long fields you need to increase this
+#define UAT_TX_BUFFER_SIZE 256     // size of TX buffer, if using with IP or long fields you need to increase this
 #define UAT_MAX_CMD_HANDLERS 10    // max number of command handlers
 #define UAT_LINE_TERMINATOR "\r\n" // this is the default for uAT to parse in a CRLF-terminated line
 

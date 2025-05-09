@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 #define RC76XX_IMEI_LEN 16
+#define RC76XX_MODEL_LEN 32
 #define RC76XX_IP_LEN 16
 #define RC76XX_CLIENTID_LEN 32
 #define RC76XX_TOPIC_LEN 64
@@ -38,11 +39,21 @@ typedef struct
 {
     RC76XX_State_t state;
     char imei[RC76XX_IMEI_LEN];
+    char model[RC76XX_MODEL_LEN];
     char ip[RC76XX_IP_LEN];
     int cnx_id; // ID returned by +KCNXCFG
     int mqtt_cfg_id; // ID returned by +KMQTTCFG
     char client_id[RC76XX_CLIENTID_LEN];
 } RC76XX_Handle_t;
+
+/**
+ * @brief  Reset the modem
+ *
+ * @param h driver handle 
+ * @return RC76XX_Result_t RC76XX_OK or error
+ */
+RC76XX_Result_t RC76XX_Reset(RC76XX_Handle_t *h);
+
 
 /**
  * @brief  Initialize the modem, get IMEI, disable echo.
@@ -71,6 +82,8 @@ RC76XX_Result_t RC76XX_ConfigMQTT(RC76XX_Handle_t *h,
                                   const char *host,
                                   uint16_t port,
                                   const char *clientID,
+                                  const char *username,
+                                  const char *password,
                                   bool useTLS);
 
 /**
