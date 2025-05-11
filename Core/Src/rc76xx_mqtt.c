@@ -145,6 +145,7 @@ RC76XX_Result_t RC76XX_ConfigMQTT(RC76XX_Handle_t *h,
                                   const char *username,
                                   const char *password,
                                   bool useTLS,
+                                  bool subscribe,
                                   uint16_t keepAliveInterval)
 {
     if (!h || h->state != RC76XX_STATE_NETWORK_READY)
@@ -153,14 +154,26 @@ RC76XX_Result_t RC76XX_ConfigMQTT(RC76XX_Handle_t *h,
     }
 
     char cmd[256], resp[64];
-
-    snprintf(cmd, sizeof(cmd),
-             "AT+KMQTTCFG=%d,%s,%u,4,\"%s\",%u,1,0,\"%s\",\"field1=0\",1,0,\"%s\",\"%s\",,\"\"",
-             useTLS ? 1 : 0,
-             host,
-             port,
-             clientID, keepAliveInterval, topic, username, password);
-
+    // AT+KMQTTCFG=<secure>,<server>,<port>,<version>,<client_id>[, [<keepalive_interval>], 
+    //                      [<clean_session>], <will_flag>, <topic_name>,<message>, <retained>, 
+    //                       <qos>[, [<username>], [<password>]],[<cipher_index>], [<alpn_list>] ]
+    if (subscribe)
+    {
+        snprintf(cmd, sizeof(cmd),
+                "AT+KMQTTCFG=%d,%s,%u,4,\"%s\",%u,1,0,\"%s\",\"field1=0\",1,0,\"%s\",\"%s\",,\"\"",
+                useTLS ? 1 : 0,
+                host,
+                port,
+                clientID, keepAliveInterval, topic, username, password);
+    }
+    else { //only set connection to sever not publish or register by default
+        snprintf(cmd, sizeof(cmd),
+                 "AT+KMQTTCFG=%d,%s,%u,4,\"%s\",%u,1,0,,,0,0,\"%s\",\"%s\",,\"\"",
+                 useTLS ? 1 : 0,
+                 host,
+                 port,
+                 clientID, keepAliveInterval, username, password);
+    }
     if (uAT_SendReceive(cmd, "OK", resp, sizeof(resp), CMD_TIMEOUT) != UAT_OK)
     {
         return RC76XX_ERR_AT;

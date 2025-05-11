@@ -94,10 +94,10 @@ void mqtt_data_handler(const char *args)
   // +KMQTT_DATA: 0,"home/LWTMessage","Test 40447"
   printf("[%lu] >>> MQTT data URC: %s", HAL_GetTick(), args);
   // extract the data, "home/LWTMessage" => topic, "Test 40447" => payload
-  char topic[100] = {""};
-  char payload[100] = {""};
-  sscanf(args, "0,%[^,],%[^,]", topic, payload);
-  printf("[%lu] >>> MQTT data topic: %s, payload: %s", HAL_GetTick(), topic, payload);
+  // char topic[100] = {""};
+  // char payload[1024] = {""};
+  // sscanf(args, "0,%[^,],%[^,]", topic, payload);
+  // printf("[%lu] >>> MQTT data topic: %s, payload: %s", HAL_GetTick(), topic, payload);
 }
 
 
@@ -371,17 +371,18 @@ static void MQTT_Task(void *argument)
   // const char *user = "";
   // const char *pass = "";
   const char *broker = "mqtt3.thingspeak.com";
-  const port = 1883;
+  const uint16_t port = 1883;
   const char *clientID = SECRET_MQTT_CLIENT_ID;
   const char *user = SECRET_MQTT_USERNAME;
   const char *pass = SECRET_MQTT_PASSWORD;
-  const char *topic = "channels/2956054/publish/";
+  const char *subTopic = "channels/2956054/subscribe";
+  const char *pubTopic = "channels/2956054/publish/fields/field1";
   const char *payload_prefix = "field1=";
 
 
   printf("Configuring MQTT %s:%u, ClientID=%s...\r\n",
                                                      broker, 1883, clientID);
-  res = RC76XX_ConfigMQTT(&mqttHandle, broker, port, clientID, topic, user, pass, false, 120);
+  res = RC76XX_ConfigMQTT(&mqttHandle, broker, port, clientID, pubTopic, user, pass, false, false, 120);
   if (res != RC76XX_OK)
   {
     printf("ConfigMQTT failed: %d\r\n", res);
@@ -417,11 +418,11 @@ static void MQTT_Task(void *argument)
   /* Subscribe to a topic */
   
   // const char *subTopic = "home/LWTMessage";
-  printf("Subscribing to %s...\r\n", topic);
-  res = RC76XX_Subscribe(&mqttHandle, topic);
+  printf("Subscribing to %s...\r\n", subTopic);
+  res = RC76XX_Subscribe(&mqttHandle, subTopic);
   if (res == RC76XX_OK)
   {
-    printf("Subscribed to %s\r\n", topic);
+    printf("Subscribed to %s\r\n", subTopic);
   }
   else
   {
@@ -435,9 +436,9 @@ static void MQTT_Task(void *argument)
     /* Publish a message */
     // const char *pubTopic = "home/LWTMessage";
     char payload[100] = {""};
-    sprintf(payload, "%s%lu", payload_prefix, now);
-    printf("Publishing to %s: %s\r\n", topic, payload);
-    res = RC76XX_Publish(&mqttHandle, topic, payload);
+    sprintf(payload, "%lu", now);
+    printf("Publishing to %s: %s\r\n", pubTopic, payload);
+    res = RC76XX_Publish(&mqttHandle, pubTopic, payload);
     if (res == RC76XX_OK)
     {
       printf("Publish OK\r\n");
@@ -448,7 +449,7 @@ static void MQTT_Task(void *argument)
     }
 
     /* Wait before next cycle */
-    vTaskDelay(delay);
+    vTaskDelay(delay * 3);
   }
 }
 

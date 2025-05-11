@@ -76,6 +76,8 @@ RC76XX_Result_t RC76XX_NetworkAttach(RC76XX_Handle_t *h);
  * @param  port
  * @param  clientID
  * @param  useTLS  true to enable SSL/TLS
+ * @param  subscribe  true to subscribe to a topic
+ * @param  keepAliveInterval  MQTT keep-alive interval in seconds
  * @return RC76XX_OK or error
  */
 RC76XX_Result_t RC76XX_ConfigMQTT(RC76XX_Handle_t *h,
@@ -86,6 +88,7 @@ RC76XX_Result_t RC76XX_ConfigMQTT(RC76XX_Handle_t *h,
                                   const char *username,
                                   const char *password,
                                   bool useTLS,
+                                  bool subscribe,
                                   uint16_t keepAliveInterval);
 
 /**
