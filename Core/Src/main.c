@@ -25,10 +25,12 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "rc76xx_mqtt.h"
 #include "stdio.h"
 #include "uat_freertos.h" // your parser header
 #include "string.h"
-#include "rc76xx_mqtt.h"
+#include "mqtt_secrets.h"
+#include "stdlib.h"
 
 /* USER CODE END Includes */
 
@@ -51,56 +53,123 @@
 
 /* USER CODE BEGIN PV */
 extern UART_HandleTypeDef huart2;
-extern RC76xx_Handle_t mqtt_handle;
+static RC76XX_Handle_t mqttHandle;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
-static void App_Task(void *pvParameters);
-static void mqtt_task(void *pvParameters);
+// static void App_Task(void *pvParameters);
+static void MQTT_Task(void *pvParameters);
 
 /* USER CODE END PFP */
 
 // /* Private user code ---------------------------------------------------------*/
 // /* USER CODE BEGIN 0 */
 
-/* creg_handler: called whenever a line beginning with "+CREG" is received */
-void creg_handler(const char *args)
-{
-  // args might be e.g. ": 1" or ": 0,1"
-  printf("[%lu] >>> Network registration URC: %s", HAL_GetTick(), args);
-  if (strcmp(args, ": 1,1") == 0)
-  {
-    printf("[%lu] >>> Network EPS registration successful", HAL_GetTick());
-  }
-}
+// /* creg_handler: called whenever a line beginning with "+CREG" is received */
+// void creg_handler(const char *args)
+// {
+//   // args might be e.g. ": 1" or ": 0,1"
+//   printf("[%lu] >>> Network registration URC: %s", HAL_GetTick(), args);
+//   if (strcmp(args, ": 1,1") == 0)
+//   {
+//     printf("[%lu] >>> Network EPS registration successful", HAL_GetTick());
+//   }
+// }
 
-/* creg_handler: called whenever a line beginning with "+CREG" is received */
-void cgreg_handler(const char *args)
-{
-  // args might be e.g. ": 1" or ": 0,1"
-  printf("[%lu] >>> Network registration URC: %s", HAL_GetTick(), args);
-  if (strcmp(args, ": 1") == 0)
-  {
-    printf("[%lu] >>> Network GPRS registration successful!!", HAL_GetTick());
-  }
-}
+// /* creg_handler: called whenever a line beginning with "+CREG" is received */
+// void cgreg_handler(const char *args)
+// {
+//   // args might be e.g. ": 1" or ": 0,1"
+//   printf("[%lu] >>> Network registration URC: %s", HAL_GetTick(), args);
+//   if (strcmp(args, ": 1") == 0)
+//   {
+//     printf("[%lu] >>> Network GPRS registration successful!!", HAL_GetTick());
+//   }
+// }
+// /* mqtt_data_handler: called whenever a line beginning with "+MQTT_DATA" is received
+//  TODO: also add logic to handle the MQTT data payload*/
+// void mqtt_data_handler(const char *args)
+// {
+//   // +KMQTT_DATA: 0,"home/LWTMessage","Test 40447"
+//   printf("[%lu] >>> MQTT data URC: %s", HAL_GetTick(), args);
+//   // extract the data, "home/LWTMessage" => topic, "Test 40447" => payload
+//   // char topic[100] = {""};
+//   // char payload[1024] = {""};
+//   // sscanf(args, "0,%[^,],%[^,]", topic, payload);
+//   // printf("[%lu] >>> MQTT data topic: %s, payload: %s", HAL_GetTick(), topic, payload);
+// }
 
-// This will be called whenever a line “OK\r\n” arrives.
-void ok_handler(const char *args)
-{
-  // args points just past the “OK” in your buffer.
-  // Since the default terminator is “\r\n”, args will typically
-  // be just “\r\n” (or the empty string if you trimmed CRLF yourself).
-  printf("[%lu] >>> Got OK response%s", HAL_GetTick(), args);
-}
-// This will be called whenever a line “OK\r\n” arrives.
-void error_handler(const char *args)
-{
-  printf("[%lu] >>> Got OK response%s", HAL_GetTick(), args);
-}
+// /* @brief: called whenever a line beginning with "+MQTT_IND" is received
+//  * the standard data is : "+KMQTT_IND: 0,4"
+//  * 0 —Connection aborted error
+//  * 1 —Connection successful (CONNACK received from the MQTT broker)
+//  * 2 —Subscribed to a topic successful (SUBACK received from the MQTT broker)
+//  * 3 —Unsubscribed to a topic successful (UNSUBACK received from the MQTT broker)
+//  * 4 —Message published successful (PUBACK received from the MQTT broker)
+//  * 5 —Generic error
+//  * 6 —Socket open successful
+//  * @param args: the URC string
+//  */
+// void mqtt_ind_handler(const char *args)
+// {
+//   // args might be e.g. ": 0" or ": 1"
+//   printf("[%lu] >>> MQTT indication URC: %s", HAL_GetTick(), args);
+//   switch (atol(args))
+//   {
+//   case 0:
+//     printf("[%lu] >>> MQTT connection aborted\n", HAL_GetTick());
+//     mqttHandle.state = RC76XX_STATE_ERROR;
+//     break;
+//   case 1:
+//     printf("[%lu] >>> MQTT connection successful\n", HAL_GetTick());
+//     mqttHandle.state = RC76XX_STATE_MQTT_CONNECTED;
+//     break;
+//   case 2:
+//     printf("[%lu] >>> MQTT subscribed to a topic successful\n", HAL_GetTick());
+//     break;
+//   case 3:
+//     printf("[%lu] >>> MQTT unsubscribed to a topic successful\n", HAL_GetTick());
+//     break;
+//   case 4:
+//     printf("[%lu] >>> MQTT message published successful\n", HAL_GetTick());
+//     break;
+//   case 5:
+//     printf("[%lu] >>> MQTT generic error\n", HAL_GetTick());
+//     mqttHandle.state = RC76XX_STATE_ERROR;
+//     break;
+//   case 6:
+//     printf("[%lu] >>> MQTT socket open successful\n", HAL_GetTick());
+//     mqttHandle.state = RC76XX_STATE_MQTT_CONNECTING;
+//     break;
+//   default:
+//     printf("[%lu] >>> MQTT unknown indication\n", HAL_GetTick());
+//     break;
+//   }
+// }
+
+// // reset handler to handel the reset URC from the module
+// void reset_handler(const char *args)
+// {
+//   mqttHandle.state = RC76XX_STATE_RESET;
+//   printf("[%lu] >>> RC76xx modem has reset!!, state transition to RC76XX_STATE_RESET:", HAL_GetTick());
+// }
+
+// // This will be called whenever a line “OK\r\n” arrives.
+// void ok_handler(const char *args)
+// {
+//   // args points just past the “OK” in your buffer.
+//   // Since the default terminator is “\r\n”, args will typically
+//   // be just “\r\n” (or the empty string if you trimmed CRLF yourself).
+//   printf("[%lu] >>> Got OK response%s", HAL_GetTick(), args);
+// }
+// // This will be called whenever a line “OK\r\n” arrives.
+// void error_handler(const char *args)
+// {
+//   printf("[%lu] >>> Got OK response%s", HAL_GetTick(), args);
+// }
 
 /* USER CODE END 0 */
 
@@ -148,26 +217,22 @@ int main(void)
   }
   printf("uAT parser initialized\n");
 
-  result = uAT_RegisterURC("+CREG", creg_handler);
-  if (result != UAT_OK)
-  {
-    printf("Failed to register +CREG handler: %d\n", result);
-  }
-  result = uAT_RegisterURC("+CGREG", cgreg_handler);
-  if (result != UAT_OK)
-  {
-    printf("Failed to register +CGREG handler: %d\n", result);
-  }
 
-  result = uAT_RegisterCommand("OK", ok_handler);
-  if (result != UAT_OK) {
-    printf("Failed to register OK handler: %d\n", result);
-  }
-  result = uAT_RegisterCommand("ERROR", error_handler);
-  if (result != UAT_OK)
-  {
-    printf("Failed to register ERROR handler: %d\n", result);
-  }
+  // result = uAT_RegisterURC("+CGREG", cgreg_handler);
+  // if (result != UAT_OK)
+  // {
+  //   printf("Failed to register +CGREG handler: %d\n", result);
+  // }
+
+  // result = uAT_RegisterCommand("OK", ok_handler);
+  // if (result != UAT_OK) {
+  //   printf("Failed to register OK handler: %d\n", result);
+  // }
+  // result = uAT_RegisterCommand("ERROR", error_handler);
+  // if (result != UAT_OK)
+  // {
+  //   printf("Failed to register ERROR handler: %d\n", result);
+  // }
 
   // retval = ATC_SendReceive(&hAtc, "ATI\r\n", 1000, NULL, 1000, 2, "\r\nOK\r\n", "\r\nERROR\r\n");
   // printf("ATC_SendReceive returned %d\n", retval);
@@ -193,13 +258,13 @@ int main(void)
   //             NULL,
   //             tskIDLE_PRIORITY + 1,
   //             NULL);
-  
-  xTaskCreate(mqtt_task,
-    "mqtt_task",
-    512 * 2,
-    NULL,
-    tskIDLE_PRIORITY + 1,
-    NULL);
+
+  xTaskCreate(MQTT_Task,
+              "MQTT_Task",
+              512 * 2,
+              NULL,
+              tskIDLE_PRIORITY + 1,
+              NULL);
 
   /* Start scheduler */
   osKernelStart();
@@ -307,101 +372,187 @@ int _read(int file, char *ptr, int len)
   return 1;
 }
 
-static void mqtt_task(void *pvParameters)
+/**
+ * @brief  MQTT_Task
+ *         Runs the RC76xx MQTT state machine:
+ *         Initialize → NetworkAttach → ConfigMQTT → ConnectMQTT → loop Publish/Subscribe
+ */
+static void MQTT_Task(void *argument)
 {
-  RC76xx_Handle_t mqtt_handle; // ignore unused parameter
-  printf("MQTT task started\r\n");
-  char myBuff[1024];
-  uAT_Result_t result;
-  RC76xx_Result_t mqtt_result;
-  char *mqtt_topic = "test/topic";
-  char *mqtt_payload = "Hello, MQTT!";
-  char *mqtt_client_id = "my_client_id";
+  RC76XX_Result_t res;
+  TickType_t delay = pdMS_TO_TICKS(20000);
 
-
-  mqtt_result = RC76xx_Initialize(&mqtt_handle);
-  if (mqtt_result != RC76xx_OK)
+  // Register all URC handlers
+  res = RC76XX_RegisterURCHandlers(&mqttHandle);
+  if (res != RC76XX_OK)
   {
-    printf("Failed to initialize MQTT: %d\r\n", mqtt_result);
+    printf("Failed to register URC handlers: %d\r\n", res);
+    vTaskSuspend(NULL);
   }
-  mqtt_result = RC76xx_Connect(&mqtt_handle);
-  if (mqtt_result != RC76xx_OK)
+  printf("Registered all URC handlers\r\n");
+
+  /* 0) Reset the modem */
+  printf("MQTT_Task: Resetting modem...\r\n");
+  res = RC76XX_Reset(&mqttHandle);
+  if (res != RC76XX_OK)
   {
-    printf("Failed to connect to MQTT: %d\r\n", mqtt_result);
+    printf("Reset failed: %d\r\n", res);
+    vTaskSuspend(NULL);
   }
+  vTaskDelay(delay);
 
-
-  for (;;)
+  /* 1) Initialize modem */
+  printf("MQTT_Task: Initializing modem...\r\n");
+  res = RC76XX_Initialize(&mqttHandle);
+  if (res != RC76XX_OK)
   {
-    // mqtt_result = RC76xx_Initialize(&mqtt_handle);
-    // if (mqtt_result != RC76xx_OK)
-    // {
-    //   printf("[mainloop] Failed to initialize MQTT: %d\r\n", mqtt_result);
-    // }
-    // vTaskDelay(pdMS_TO_TICKS(10000));
-
-    mqtt_result = RC76xx_Connect(&mqtt_handle);
-    if (mqtt_result != RC76xx_OK)
-    {
-      printf("Failed to connect to MQTT: %d\r\n", mqtt_result);
-    }
-    vTaskDelay(pdMS_TO_TICKS(10000));
+    printf("Init failed: %d\r\n", res);
+    vTaskSuspend(NULL);
   }
+  printf("Initialized, IMEI=%s\r\n", mqttHandle.imei);
 
-}
+  /* 2) Attach to network & get IP */
+  printf("Attaching to network...\r\n");
+  res = RC76XX_NetworkAttach(&mqttHandle);
+  if (res != RC76XX_OK)
+  {
+    printf("NetworkAttach failed: %d\r\n", res);
+    vTaskSuspend(NULL);
+  }
+  printf("Network ready, IP=%s\r\n", mqttHandle.ip);
 
-// Example application task
-static void App_Task(void *pvParameters)
-{
-  (void)pvParameters; // ignore unused parameter
-  printf("Application task started\r\n");
-  char myBuff[1024];
-  uAT_Result_t result;
+  // /* 3) Configure MQTT */
+  // const char *broker = "broker.hivemq.com";
+  // const char *clientID = "QCX216";
+  // const char *user = "";
+  // const char *pass = "";
+  const char *broker = "mqtt3.thingspeak.com";
+  const uint16_t port = 1883;
+  const char *clientID = SECRET_MQTT_CLIENT_ID;
+  const char *user = SECRET_MQTT_USERNAME;
+  const char *pass = SECRET_MQTT_PASSWORD;
+  const char *subTopic = "channels/2956054/subscribe";
+  const char *pubTopic = "channels/2956054/publish/fields/field1";
+  const char *payload_prefix = "field1=";
+
+
+  printf("Configuring MQTT %s:%u, ClientID=%s...\r\n",
+                                                     broker, 1883, clientID);
+  res = RC76XX_ConfigMQTT(&mqttHandle, broker, port, clientID, pubTopic, user, pass, false, false, 120);
+  if (res != RC76XX_OK)
+  {
+    printf("ConfigMQTT failed: %d\r\n", res);
+    vTaskSuspend(NULL);
+  }
+  printf("MQTT configured, cfg_id=%d\r\n", mqttHandle.mqtt_cfg_id);
+
+  /* 4) Connect MQTT */
+  printf("Connecting MQTT...\r\n");
+  res = RC76XX_ConnectMQTT(&mqttHandle);
+  if (res != RC76XX_OK)
+  {
+    printf("ConnectMQTT failed: %d\r\n", res);
+    vTaskSuspend(NULL);
+  }
+  vTaskDelay(delay);
+  printf("MQTT connected\r\n");
+
+  // result = uAT_RegisterURC("+QCEUICCSUPPORT:0", reset_handler);
+  // if (result != UAT_OK)
+  // {
+  //   printf("Failed to register +CREG handler: %d\n", result);
+  // }
+  printf("Registered +KMQTT_DATA handler\r\n");
+  /* Subscribe to a topic */
   
+  // const char *subTopic = "home/LWTMessage";
+  printf("Subscribing to %s...\r\n", subTopic);
+  res = RC76XX_Subscribe(&mqttHandle, subTopic);
+  if (res == RC76XX_OK)
+  {
+    printf("Subscribed to %s\r\n", subTopic);
+  }
+  else
+  {
+    printf("Subscribe failed: %d\r\n", res);
+  }
+  /* 5) In a loop, publish and subscribe */
   for (;;)
   {
-    // e.g. periodically send an AT command
-    printf("[%lu] sending 'AT' command\r\n", HAL_GetTick());
-    result = uAT_SendCommand("AT");
-    if (result != UAT_OK) {
-      printf("Failed to send AT command: %d\r\n", result);
-    }
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    
-    printf("[%lu] sending 'AT+CREG?' command\r\n", HAL_GetTick());
-    result = uAT_SendCommand("AT+CREG?");
-    if (result != UAT_OK) {
-      printf("Failed to send AT+CREG? command: %d\r\n", result);
-    }
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    
-    printf("[%lu] sending 'AT!GSTATUS?' command\r\n", HAL_GetTick());
-    result = uAT_SendCommand("AT!GSTATUS?");
-    if (result != UAT_OK) {
-      printf("Failed to send AT!GSTATUS? command: %d\r\n", result);
-    }
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    
-    if (uAT_UnregisterCommand("OK") != UAT_OK)
+
+    uint32_t now = HAL_GetTick();
+    /* Publish a message */
+    // const char *pubTopic = "home/LWTMessage";
+    char payload[100] = {""};
+    sprintf(payload, "%lu", now);
+    printf("Publishing to %s: %s\r\n", pubTopic, payload);
+    res = RC76XX_Publish(&mqttHandle, pubTopic, payload);
+    if (res == RC76XX_OK)
     {
-      printf("Failed to unregister command\r\n");
+      printf("Publish OK\r\n");
+    }
+    else
+    {
+      printf("Publish failed: %d\r\n", res);
     }
 
-    result = uAT_SendReceive("ATI", "OK", myBuff, sizeof(myBuff), pdMS_TO_TICKS(1000));
-    if (result != UAT_OK) {
-      printf("Failed to uAT_SendReceive command: %d\r\n", result);
-    } else {
-      printf("[%lu] received: \n\n%s\r\n", HAL_GetTick(), myBuff);
-    }
-    
-    result = uAT_RegisterCommand("OK", ok_handler);
-    if (result != UAT_OK) {
-      printf("Failed to re-register OK handler: %d\r\n", result);
-    }
-    
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    /* Wait before next cycle */
+    vTaskDelay(delay * 3);
   }
 }
+
+// // Example application task
+// static void App_Task(void *pvParameters)
+// {
+//   (void)pvParameters; // ignore unused parameter
+//   printf("Application task started\r\n");
+//   char myBuff[1024];
+//   uAT_Result_t result;
+
+//   for (;;)
+//   {
+//     // e.g. periodically send an AT command
+//     printf("[%lu] sending 'AT' command\r\n", HAL_GetTick());
+//     result = uAT_SendCommand("AT");
+//     if (result != UAT_OK) {
+//       printf("Failed to send AT command: %d\r\n", result);
+//     }
+//     vTaskDelay(pdMS_TO_TICKS(1000));
+
+//     printf("[%lu] sending 'AT+CREG?' command\r\n", HAL_GetTick());
+//     result = uAT_SendCommand("AT+CREG?");
+//     if (result != UAT_OK) {
+//       printf("Failed to send AT+CREG? command: %d\r\n", result);
+//     }
+//     vTaskDelay(pdMS_TO_TICKS(1000));
+
+//     printf("[%lu] sending 'AT!GSTATUS?' command\r\n", HAL_GetTick());
+//     result = uAT_SendCommand("AT!GSTATUS?");
+//     if (result != UAT_OK) {
+//       printf("Failed to send AT!GSTATUS? command: %d\r\n", result);
+//     }
+//     vTaskDelay(pdMS_TO_TICKS(1000));
+
+//     if (uAT_UnregisterCommand("OK") != UAT_OK)
+//     {
+//       printf("Failed to unregister command\r\n");
+//     }
+
+//     result = uAT_SendReceive("ATI", "OK", myBuff, sizeof(myBuff), pdMS_TO_TICKS(1000));
+//     if (result != UAT_OK) {
+//       printf("Failed to uAT_SendReceive command: %d\r\n", result);
+//     } else {
+//       printf("[%lu] received: \n\n%s\r\n", HAL_GetTick(), myBuff);
+//     }
+
+//     result = uAT_RegisterCommand("OK", ok_handler);
+//     if (result != UAT_OK) {
+//       printf("Failed to re-register OK handler: %d\r\n", result);
+//     }
+
+//     vTaskDelay(pdMS_TO_TICKS(5000));
+//   }
+// }
 /* USER CODE END 4 */
 
 /**

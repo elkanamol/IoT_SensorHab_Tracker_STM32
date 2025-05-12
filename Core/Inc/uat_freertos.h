@@ -33,10 +33,10 @@ extern "C"
 
 // Configuration macros (can override before include)
 #ifndef UAT_RX_BUFFER_SIZE
-#define UAT_RX_BUFFER_SIZE 256
+#define UAT_RX_BUFFER_SIZE 512
 #endif
 #ifndef UAT_TX_BUFFER_SIZE
-#define UAT_TX_BUFFER_SIZE 128
+#define UAT_TX_BUFFER_SIZE 512
 #endif
 #ifndef UAT_MAX_CMD_HANDLERS
 #define UAT_MAX_CMD_HANDLERS 10
