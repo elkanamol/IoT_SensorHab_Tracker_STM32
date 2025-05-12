@@ -12,28 +12,108 @@
 #define RC76XX_TOPIC_LEN 64
 #define RC76XX_PAYLOAD_LEN 128
 
-/** High-level result codes for the RC76xx driver */
+/**
+ * @brief Enumeration of possible result codes for the RC76xx driver
+ *
+ * Defines the various status and error conditions that can be returned
+ * by RC76xx driver functions to indicate the outcome of operations.
+ */
 typedef enum
 {
     RC76XX_OK = 0,
-    RC76XX_ERR_TIMEOUT,
+    RC76XX_ERR_INTERNAL,
     RC76XX_ERR_AT,
-    RC76XX_ERR_STATE,
     RC76XX_ERR_PARSE,
-    RC76XX_ERR_INTERNAL
+    RC76XX_ERR_STATE,
+    RC76XX_ERR_BUFFER_OVERFLOW, // New error code
+    RC76XX_ERR_TIMEOUT,
 } RC76XX_Result_t;
 
-/** Driver states */
+/**
+ * @brief Enumeration of driver states for the RC76xx MQTT driver
+ *
+ * Defines the various operational states that the RC76xx modem can be in
+ * during MQTT communication and network interactions.
+ * 
+ * RC76XX MQTT State Machine
+ * =========================
+ *
+ * State Transition Diagram:
+ *
+ * ┌─────────────────┐     RC76XX_Reset()     ┌─────────────────┐
+ * │                 │◄────────────────────────┤                 │
+ * │ RC76XX_STATE_   │                         │ Any State       │
+ * │ RESET           │                         │                 │
+ * │                 │                         └─────────────────┘
+ * └────────┬────────┘
+ *          │ RC76XX_Initialize()
+ *          ▼
+ * ┌─────────────────┐
+ * │ RC76XX_STATE_   │
+ * │ INITIALIZED     │
+ * │                 │
+ * └────────┬────────┘
+ *          │ RC76XX_NetworkAttach()
+ *          ▼
+ * ┌─────────────────┐
+ * │ RC76XX_STATE_   │
+ * │ NETWORK_READY   │
+ * │                 │
+ * └────────┬────────┘
+ *          │ RC76XX_ConfigMQTT()
+ *          ▼
+ * ┌─────────────────┐
+ * │ RC76XX_STATE_   │
+ * │ MQTT_CONFIGURED │
+ * │                 │
+ * └────────┬────────┘
+ *          │ RC76XX_ConnectMQTT()
+ *          ▼
+ * ┌─────────────────┐
+ * │ RC76XX_STATE_   │
+ * │ MQTT_CONNECTING │
+ * │                 │
+ * └────────┬────────┘
+ *          │ URC: +KMQTT_IND: 0,1
+ *          ▼
+ * ┌─────────────────┐
+ * │ RC76XX_STATE_   │◄───────┐
+ * │ MQTT_CONNECTED  │        │
+ * │                 │        │ RC76XX_Subscribe()
+ * └────────┬────────┘        │ RC76XX_Publish()
+ *          │                 │
+ *          │ RC76XX_Disconnect()
+ *          ▼
+ * ┌─────────────────┐
+ * │ RC76XX_STATE_   │
+ * │ RESET           │
+ * │                 │
+ * └─────────────────┘
+ *
+ * Error Transitions:
+ * - Any AT command failure → RC76XX_STATE_ERROR
+ * - URC: +KMQTT_IND: 0,0 or +KMQTT_IND: 0,5 → RC76XX_STATE_ERROR
+ * - Reset URC → RC76XX_STATE_RESET
+ *
+ * Driver states */
 typedef enum
 {
     RC76XX_STATE_RESET = 0,
     RC76XX_STATE_INITIALIZED,
     RC76XX_STATE_NETWORK_READY,
     RC76XX_STATE_MQTT_CONFIGURED,
+    RC76XX_STATE_MQTT_CONNECTING,
     RC76XX_STATE_MQTT_CONNECTED,
     RC76XX_STATE_ERROR
 } RC76XX_State_t;
 
+/**
+ * @brief Opaque driver handle for the RC76xx MQTT driver
+ *
+ * Represents an internal structure containing the state and configuration
+ * for an RC76xx modem instance. This handle is used to track and manage
+ * the modem's connection, network, and MQTT-related parameters.
+ */
 /** Opaque driver handle */
 typedef struct
 {
@@ -70,13 +150,16 @@ RC76XX_Result_t RC76XX_Initialize(RC76XX_Handle_t *h);
 RC76XX_Result_t RC76XX_NetworkAttach(RC76XX_Handle_t *h);
 
 /**
- * @brief  Configure MQTT parameters (server, port, clientID, SSL).
- * @param  h
+ * @brief  Configure MQTT parameters (server, port, clientID, authentication, SSL).
+ * @param  h  driver handle
  * @param  host   MQTT broker DNS or IP
- * @param  port
- * @param  clientID
- * @param  useTLS  true to enable SSL/TLS
- * @param  subscribe  true to subscribe to a topic
+ * @param  port   MQTT broker port number
+ * @param  clientID  Unique client identifier for the MQTT connection
+ * @param  topic  Optional topic for subscription
+ * @param  username  Optional username for MQTT authentication
+ * @param  password  Optional password for MQTT authentication
+ * @param  useTLS  true to enable SSL/TLS encryption
+ * @param  subscribe  true to subscribe to the specified topic
  * @param  keepAliveInterval  MQTT keep-alive interval in seconds
  * @return RC76XX_OK or error
  */
@@ -99,10 +182,10 @@ RC76XX_Result_t RC76XX_ConfigMQTT(RC76XX_Handle_t *h,
 RC76XX_Result_t RC76XX_ConnectMQTT(RC76XX_Handle_t *h);
 
 /**
- * @brief  Publish a message.
- * @param  h
- * @param  topic
- * @param  payload
+ * @brief  Publish a message to a specified MQTT topic.
+ * @param  h  driver handle
+ * @param  topic  MQTT topic to publish the message to
+ * @param  payload  Message payload to be published
  * @return RC76XX_OK or error
  */
 RC76XX_Result_t RC76XX_Publish(RC76XX_Handle_t *h,
@@ -111,8 +194,8 @@ RC76XX_Result_t RC76XX_Publish(RC76XX_Handle_t *h,
 
 /**
  * @brief  Subscribe to a topic.
- * @param  h
- * @param  topic
+ * @param  h  driver handle
+ * @param  topic  MQTT topic to subscribe to
  * @return RC76XX_OK or error
  */
 RC76XX_Result_t RC76XX_Subscribe(RC76XX_Handle_t *h,
@@ -120,9 +203,58 @@ RC76XX_Result_t RC76XX_Subscribe(RC76XX_Handle_t *h,
 
 /**
  * @brief  Disconnect MQTT and tear down.
- * @param  h
+ * @param  h  driver handle
  * @return RC76XX_OK or error
  */
 RC76XX_Result_t RC76XX_Disconnect(RC76XX_Handle_t *h);
+
+/**
+ * @brief  Register URC (Unsolicited Result Code) handlers for MQTT communication.
+ * @param  h  driver handle
+ * @return RC76XX_OK or error
+ */
+RC76XX_Result_t RC76XX_RegisterURCHandlers(RC76XX_Handle_t *h);
+
+// URC handlers
+/**
+ * @brief  Handle the CREG (Circuit/Network Registration) URC event.
+ * @param  args  Arguments associated with the CREG URC
+ */
+void rc76xx_creg_handler(const char *args);
+/**
+ * @brief  Handle the CGREG (Circuit/GPRS Network Registration) URC event.
+ * @param  args  Arguments associated with the CGREG URC
+ */
+void rc76xx_cgreg_handler(const char *args);
+
+/**
+ * @brief  Handle the MQTT data received URC event.
+ * @param  args  Arguments associated with the MQTT data URC
+ */
+void rc76xx_mqtt_data_handler(const char *args);
+
+/**
+ * @brief  Handle the MQTT indication URC event.
+ * @param  args  Arguments associated with the MQTT indication URC
+ */
+void rc76xx_mqtt_ind_handler(const char *args);
+
+/**
+ * @brief  Handle the reset URC event.
+ * @param  args  Arguments associated with the reset URC
+ */
+void rc76xx_reset_handler(const char *args);
+
+/**
+ * @brief  Handle the OK response URC event.
+ * @param  args  Arguments associated with the OK URC
+ */
+void rc76xx_ok_handler(const char *args);
+
+/**
+ * @brief  Handle the error URC event.
+ * @param  args  Arguments associated with the error URC
+ */
+void rc76xx_error_handler(const char *args);
 
 #endif // RC76XX_MQTT_H

@@ -2,6 +2,7 @@
 #include "uat_freertos.h"
 #include "string.h"
 #include "stdbool.h"
+#include "stdlib.h"
 
 /**
  * @brief Check if a response contains a specific prefix
