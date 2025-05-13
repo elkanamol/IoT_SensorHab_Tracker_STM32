@@ -31,22 +31,43 @@ extern "C"
 #include <stddef.h>
 #include <stdbool.h>
 
-// Configuration macros (can override before include)
+/* -------------------- Configuration -------------------- */
+/* These values can be overridden by defining them before including this file */
+
 #ifndef UAT_RX_BUFFER_SIZE
-#define UAT_RX_BUFFER_SIZE 512
+#define UAT_RX_BUFFER_SIZE 512     /**< Size of RX buffer */
 #endif
+
 #ifndef UAT_TX_BUFFER_SIZE
-#define UAT_TX_BUFFER_SIZE 512
+#define UAT_TX_BUFFER_SIZE 512     /**< Size of TX buffer */
 #endif
+
 #ifndef UAT_MAX_CMD_HANDLERS
-#define UAT_MAX_CMD_HANDLERS 10
+#define UAT_MAX_CMD_HANDLERS 10    /**< Max number of command handlers */
 #endif
+
 #ifndef UAT_LINE_TERMINATOR
-#define UAT_LINE_TERMINATOR "\r\n"
+#define UAT_LINE_TERMINATOR "\r\n" /**< Line terminator for AT commands */
 #endif
+
+#ifndef UAT_TX_TIMEOUT_MS
+#define UAT_TX_TIMEOUT_MS 1000     /**< Timeout for TX operations in ms */
+#endif
+
+#ifndef UAT_MUTEX_TIMEOUT_MS
+#define UAT_MUTEX_TIMEOUT_MS 500   /**< Timeout for mutex acquisition in ms */
+#endif
+
+#ifndef UAT_DMA_RX_SIZE
+#define UAT_DMA_RX_SIZE 512        /**< Size of DMA RX buffer */
+#endif
+
+/* Enable/disable DMA reception */
 #ifndef UAT_USE_DMA
-#define UAT_USE_DMA
+#define UAT_USE_DMA               /**< Define to use DMA for reception */
 #endif
+
+/* -------------------- End Configuration -------------------- */
 
     /** 
      * @brief Result codes for all API operations
@@ -66,10 +87,6 @@ extern "C"
         UAT_ERR_RESOURCE        ///< Resource allocation failed
     } uAT_Result_t;
 
-
-    // Uncomment to enable circular DMA RX (uses UART IDLE interrupt)
-    // #define UAT_USE_DMA
-
     // Forward declaration of the uAT handle (opaque in user code)
     typedef struct uAT_HandleStruct uAT_Handle_t;
 
@@ -79,7 +96,6 @@ extern "C"
     typedef void (*uAT_CommandHandler)(const char *args);
 
     // API
-
 
     /**
      * @brief  Initialize the uAT parser module
@@ -165,8 +181,9 @@ extern "C"
     /**
      * @brief  Must be called from UART IRQ handler on IDLE line event
      *         Extracts new bytes from DMA buffer into stream buffer
+     * @return nothing
      */
-    void uAT_UART_IdleHandler(void);
+    bool uAT_UART_IdleHandler(void);
 #endif
 
     /**

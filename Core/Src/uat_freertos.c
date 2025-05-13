@@ -6,17 +6,12 @@
  * It uses FreeRTOS primitives for thread safety and provides both DMA and
  * interrupt-driven UART reception options.
  *
- * Implementation notes:
- * - Uses stream buffers for UART reception buffering
- * - Uses semaphores for synchronization
- * - Supports circular DMA buffer handling
- *
  * @author [Elkana Molson]
  * @date [06/05/2025]
  */
 
 #include "stm32f756xx.h"
-#include "stm32f7xx_hal.h" // or your HAL header
+#include "stm32f7xx_hal.h"
 #include "stm32f7xx_hal_uart.h"
 #include "usart.h"
 #include "cmsis_os.h"
@@ -31,22 +26,8 @@
 
 #include "uat_freertos.h"
 
-// Configuration: define UAT_USE_DMA for DMA-based RX, otherwise interrupt-driven RX
-
-#ifndef UAT_CONFIG_DEFINED
-// Default configuration
-#define UAT_USE_DMA
-#endif
-
-// for standard uAT, change these to match your needs
-#define UAT_RX_BUFFER_SIZE 512     // size of RX buffer
-#define UAT_TX_BUFFER_SIZE 512     // size of TX buffer, if using with IP or long fields you need to increase this
-#define UAT_MAX_CMD_HANDLERS 10    // max number of command handlers
-#define UAT_LINE_TERMINATOR "\r\n" // this is the default for uAT to parse in a CRLF-terminated line
-
-#ifdef UAT_USE_DMA // for DMA-based RX
-#define UART_DMA_RX_SIZE 512
-static uint8_t uart_dma_rx_buf[UART_DMA_RX_SIZE];
+#ifdef UAT_USE_DMA
+static uint8_t uart_dma_rx_buf[UAT_DMA_RX_SIZE];
 static volatile size_t dma_last_pos __attribute__((aligned(4))) = 0;
 #endif
 
@@ -111,60 +92,97 @@ static inline void uAT_PushRxByte(uint8_t byte)
  * to the stream buffer, tracking the last processed position.
  * 
  * @note This function is designed to be called from the UART IDLE line interrupt handler
- * @note Uses critical sections to safely update shared position tracking variable
+ * @return true if data was successfully processed, false on error
  */
-void uAT_UART_IdleHandler(void)
+bool uAT_UART_IdleHandler(void)
 {
-    UBaseType_t uxSavedInterruptStatus;
-    size_t current_pos = UART_DMA_RX_SIZE - __HAL_DMA_GET_COUNTER(uat.huart->hdmarx);
-    size_t last_pos;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    if (uat.huart == NULL || uat.huart->hdmarx == NULL || uat.rxStream == NULL) {
+        return false; // Safety check for null pointers
+    }
 
-    // Enter critical section
+    UBaseType_t uxSavedInterruptStatus;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    bool success = true;
+    
+    // Get current DMA position atomically
+    size_t current_pos = UAT_DMA_RX_SIZE - __HAL_DMA_GET_COUNTER(uat.huart->hdmarx);
+    
+    // Enter critical section to get last position
     uxSavedInterruptStatus = taskENTER_CRITICAL_FROM_ISR();
-    last_pos = dma_last_pos;
+    size_t last_pos = dma_last_pos;
     taskEXIT_CRITICAL_FROM_ISR(uxSavedInterruptStatus);
     
     // No new data
     if (current_pos == last_pos) {
-        return;
+        return true; // No error, just no new data
     }
     
     // Handle normal case (no buffer wrap)
     if (current_pos > last_pos) {
         size_t data_len = current_pos - last_pos;
-        xStreamBufferSendFromISR(uat.rxStream,
-                          &uart_dma_rx_buf[last_pos], 
-                          data_len, 
-                          &xHigherPriorityTaskWoken);
+        
+        // Check for buffer overflow
+        if (data_len > UAT_DMA_RX_SIZE) {
+            // This should never happen, but handle it safely
+            data_len = UAT_DMA_RX_SIZE - last_pos;
+            success = false;
+        }
+        
+        // Send data to stream buffer
+        size_t bytes_sent = xStreamBufferSendFromISR(
+            uat.rxStream,
+            &uart_dma_rx_buf[last_pos], 
+            data_len, 
+            &xHigherPriorityTaskWoken
+        );
+        
+        // Check if all bytes were sent
+        if (bytes_sent < data_len) {
+            success = false; // Stream buffer might be full
+        }
     }
     // Handle buffer wrap case
     else {
         // Data from last_pos to end of buffer
-        size_t tail_len = UART_DMA_RX_SIZE - last_pos;
+        size_t tail_len = UAT_DMA_RX_SIZE - last_pos;
+        
         if (tail_len > 0) {
-            xStreamBufferSendFromISR(uat.rxStream,
-                              &uart_dma_rx_buf[last_pos], 
-                              tail_len, 
-                              &xHigherPriorityTaskWoken);
+            size_t bytes_sent = xStreamBufferSendFromISR(
+                uat.rxStream,
+                &uart_dma_rx_buf[last_pos], 
+                tail_len, 
+                &xHigherPriorityTaskWoken
+            );
+            
+            if (bytes_sent < tail_len) {
+                success = false;
+            }
         }
         
         // Data from start of buffer to current position
-        if (current_pos > 0) {
-            xStreamBufferSendFromISR(uat.rxStream,
-                              &uart_dma_rx_buf[0], 
-                              current_pos, 
-                              &xHigherPriorityTaskWoken);
+        if (current_pos > 0 && success) {
+            size_t bytes_sent = xStreamBufferSendFromISR(
+                uat.rxStream,
+                &uart_dma_rx_buf[0], 
+                current_pos, 
+                &xHigherPriorityTaskWoken
+            );
+            
+            if (bytes_sent < current_pos) {
+                success = false;
+            }
         }
     }
     
-    // Update position tracking
+    // Update position tracking atomically
     uxSavedInterruptStatus = taskENTER_CRITICAL_FROM_ISR();
     dma_last_pos = current_pos;
     taskEXIT_CRITICAL_FROM_ISR(uxSavedInterruptStatus);
     
     // Yield if needed
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    
+    return success;
 }
 
 // ISR: called from UART IRQ when IDLE flag set
@@ -172,11 +190,17 @@ void uAT_UART_IdleHandler(void)
 // Note: the checking and calling uAT_UART_IdleHandler() is done before USARTx_IRQHandler.
 void USARTx_IRQHandler(void)
 {
-    if (__HAL_UART_GET_FLAG(uat.huart, UART_FLAG_IDLE))
+    // Check if this is our UART and if IDLE flag is set
+    if (uat.huart != NULL && __HAL_UART_GET_FLAG(uat.huart, UART_FLAG_IDLE))
     {
+        // Clear the IDLE flag
         __HAL_UART_CLEAR_IDLEFLAG(uat.huart);
+        
+        // Process received data
         uAT_UART_IdleHandler();
     }
+    
+    // Call the HAL UART IRQ handler
     HAL_UART_IRQHandler(uat.huart);
 }
 
@@ -185,9 +209,14 @@ void USARTx_IRQHandler(void)
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
     static uint8_t rxByte;
+    
+    // Check if this is our UART
     if (huart == uat.huart)
     {
+        // Push the received byte to the stream buffer
         uAT_PushRxByte(rxByte);
+        
+        // Restart reception for the next byte
         HAL_UART_Receive_IT(uat.huart, &rxByte, 1);
     }
 }
@@ -206,75 +235,157 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
  */
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
+    // Check if this is our UART
     if (huart == uat.huart)
     {
         BaseType_t xHigher = pdFALSE;
+        
+        // Signal that transmission is complete
         xSemaphoreGiveFromISR(uat.txComplete, &xHigher);
+        
+        // Yield if a higher priority task was woken
         portYIELD_FROM_ISR(xHigher);
     }
 }
 
 // === CORE API ===
 
+/**
+ * @brief  Initialize the uAT parser module
+ * @param  huart Pointer to HAL UART handle
+ * @return UAT_OK if successful, or appropriate error code on failure
+ */
 uAT_Result_t uAT_Init(UART_HandleTypeDef *huart)
 {
-    if (!huart)
-    {
+    // Validate input parameters
+    if (!huart) {
         return UAT_ERR_INVALID_ARG;
     }
 
+    // Clear the handle structure
     memset(&uat, 0, sizeof(uat));
     uat.huart = huart;
+    
+    // Create FreeRTOS primitives
     uat.rxStream = xStreamBufferCreate(UAT_RX_BUFFER_SIZE, 1);
+    if (!uat.rxStream) {
+        return UAT_ERR_RESOURCE;
+    }
+    
     uat.txComplete = xSemaphoreCreateBinary();
+    if (!uat.txComplete) {
+        vStreamBufferDelete(uat.rxStream);
+        return UAT_ERR_RESOURCE;
+    }
+    
     uat.txMutex = xSemaphoreCreateMutex();
+    if (!uat.txMutex) {
+        vStreamBufferDelete(uat.rxStream);
+        vSemaphoreDelete(uat.txComplete);
+        return UAT_ERR_RESOURCE;
+    }
+    
     uat.handlerMutex = xSemaphoreCreateMutex();
+    if (!uat.handlerMutex) {
+        vStreamBufferDelete(uat.rxStream);
+        vSemaphoreDelete(uat.txComplete);
+        vSemaphoreDelete(uat.txMutex);
+        return UAT_ERR_RESOURCE;
+    }
+    
     uat.sendReceiveSem = xSemaphoreCreateBinary();
+    if (!uat.sendReceiveSem) {
+        vStreamBufferDelete(uat.rxStream);
+        vSemaphoreDelete(uat.txComplete);
+        vSemaphoreDelete(uat.txMutex);
+        vSemaphoreDelete(uat.handlerMutex);
+        return UAT_ERR_RESOURCE;
+    }
+    
+    // Initialize state variables
     uat.inSendReceive = false;
     uat.srBuffer = NULL;
     uat.srBufferSize = 0;
     uat.srBufferPos = 0;
-    
-    if (!uat.rxStream || !uat.txComplete || !uat.txMutex || 
-        !uat.handlerMutex || !uat.sendReceiveSem)
-        return UAT_ERR_RESOURCE;
+    uat.cmdCount = 0;
 
 #ifdef UAT_USE_DMA
     // Reset DMA position tracking
     dma_last_pos = 0;
     
-    // start circular DMA reception
+    // Start circular DMA reception
     __HAL_RCC_DMA1_CLK_ENABLE();
-    if (HAL_UART_Receive_DMA(huart, uart_dma_rx_buf, UART_DMA_RX_SIZE) != HAL_OK)
+    if (HAL_UART_Receive_DMA(huart, uart_dma_rx_buf, UAT_DMA_RX_SIZE) != HAL_OK) {
+        // Clean up all resources on failure
+        vStreamBufferDelete(uat.rxStream);
+        vSemaphoreDelete(uat.txComplete);
+        vSemaphoreDelete(uat.txMutex);
+        vSemaphoreDelete(uat.handlerMutex);
+        vSemaphoreDelete(uat.sendReceiveSem);
         return UAT_ERR_INIT_FAIL;
+    }
 
-    // ensure IDLE interrupt enabled
+    // Enable IDLE interrupt
     __HAL_UART_CLEAR_IDLEFLAG(huart);
     __HAL_UART_ENABLE_IT(uat.huart, UART_IT_IDLE);
 #else
-    // start byte-by-byte IRQ reception
-    static uint8_t dummy;
-    if (HAL_UART_Receive_IT(huart, &dummy, 1) != HAL_OK)
+    // Start byte-by-byte IRQ reception
+    static uint8_t rxByte;
+    if (HAL_UART_Receive_IT(huart, &rxByte, 1) != HAL_OK) {
+        // Clean up all resources on failure
+        vStreamBufferDelete(uat.rxStream);
+        vSemaphoreDelete(uat.txComplete);
+        vSemaphoreDelete(uat.txMutex);
+        vSemaphoreDelete(uat.handlerMutex);
+        vSemaphoreDelete(uat.sendReceiveSem);
         return UAT_ERR_INIT_FAIL;
+    }
 #endif
 
     return UAT_OK;
 }
 
+/**
+ * @brief  Register a command string and its handler
+ * @param  cmd     Null-terminated string to match at start of line
+ * @param  handler Function called when a line beginning with cmd arrives
+ * @return UAT_OK if registered, or appropriate error code on failure
+ */
 uAT_Result_t uAT_RegisterCommand(const char *cmd, uAT_CommandHandler handler)
 {
-    if (!cmd || !handler)
-    {
+    // Validate input parameters
+    if (!cmd || !handler) {
+        return UAT_ERR_INVALID_ARG;
+    }
+    
+    // Check command length
+    size_t cmdLen = strlen(cmd);
+    if (cmdLen == 0 || cmdLen >= UAT_RX_BUFFER_SIZE) {
         return UAT_ERR_INVALID_ARG;
     }
 
-    if (xSemaphoreTake(uat.handlerMutex, portMAX_DELAY) != pdTRUE)
+    // Try to acquire mutex with timeout
+    if (xSemaphoreTake(uat.handlerMutex, portMAX_DELAY) != pdTRUE) {
         return UAT_ERR_BUSY;
+    }
 
+    // Check if command already exists
+    for (size_t i = 0; i < uat.cmdCount; i++) {
+        if (strcmp(uat.cmdHandlers[i].command, cmd) == 0) {
+            // Update existing handler
+            uat.cmdHandlers[i].handler = handler;
+            xSemaphoreGive(uat.handlerMutex);
+            return UAT_OK;
+        }
+    }
+    
+    // Add new command handler if space available
     uAT_Result_t result = UAT_ERR_RESOURCE;
-    if (uat.cmdCount < UAT_MAX_CMD_HANDLERS)
-    {
-        uat.cmdHandlers[uat.cmdCount++] = (uAT_CommandEntry){cmd, handler};
+    if (uat.cmdCount < UAT_MAX_CMD_HANDLERS) {
+        // Store command string and handler
+        uat.cmdHandlers[uat.cmdCount].command = cmd;
+        uat.cmdHandlers[uat.cmdCount].handler = handler;
+        uat.cmdCount++;
         result = UAT_OK;
     }
     
@@ -282,80 +393,148 @@ uAT_Result_t uAT_RegisterCommand(const char *cmd, uAT_CommandHandler handler)
     return result;
 }
 
-// Note: This function should be called with handlerMutex already taken
+/**
+ * @brief  Unregister a previously registered command
+ * @note   This function should be called with `uat.handlerMutex` already taken
+ * @param  cmd Null-terminated string of the command to unregister
+ * @return UAT_OK if unregistered, or appropriate error code on failure
+ */
 uAT_Result_t uAT_UnregisterCommand(const char *cmd)
 {
-    if (!cmd) 
+    // Validate input parameters
+    if (!cmd) {
         return UAT_ERR_INVALID_ARG;
-        
-    for (size_t i = 0; i < uat.cmdCount; i++)
-    {
-        if (strcmp(uat.cmdHandlers[i].command, cmd) == 0)
-        {
-            for (size_t j = i; j < uat.cmdCount - 1; j++)
-            {
+    }
+    
+    // Search for the command in the handler array
+    for (size_t i = 0; i < uat.cmdCount; i++) {
+        if (strcmp(uat.cmdHandlers[i].command, cmd) == 0) {
+            // Found the command, now remove it by shifting all subsequent entries
+            for (size_t j = i; j < uat.cmdCount - 1; j++) {
                 uat.cmdHandlers[j] = uat.cmdHandlers[j + 1];
             }
+            
+            // Clear the last entry and decrement count
+            uat.cmdHandlers[uat.cmdCount - 1].command = NULL;
+            uat.cmdHandlers[uat.cmdCount - 1].handler = NULL;
             uat.cmdCount--;
+            
             return UAT_OK;
         }
     }
     
+    // Command not found
     return UAT_ERR_NOT_FOUND;
 }
 
-// Helper function to safely append data to the SendReceive buffer
-static void uAT_AppendToResponseBuffer(const char *data, size_t len)
+/**
+ * @brief Helper function to safely append data to the SendReceive buffer
+ * 
+ * @param data Data to append to the buffer
+ * @param len Length of the data
+ * @return true if data was appended successfully, false otherwise
+ */
+static bool uAT_AppendToResponseBuffer(const char *data, size_t len)
 {
+    // Validate parameters
+    if (data == NULL || len == 0) {
+        return false;
+    }
+    
     // Check if we're in a SendReceive operation and have a valid buffer
-    if (!uat.inSendReceive || !uat.srBuffer || uat.srBufferPos >= uat.srBufferSize - 1)
-        return;
+    if (!uat.inSendReceive || !uat.srBuffer || uat.srBufferPos >= uat.srBufferSize - 1) {
+        return false;
+    }
     
     // Calculate how much space is left in the buffer
     size_t spaceLeft = uat.srBufferSize - uat.srBufferPos - 1; // -1 for null terminator
     
     // Limit copy to available space
-    if (len > spaceLeft)
+    if (len > spaceLeft) {
         len = spaceLeft;
+    }
     
     // Copy data to buffer
     if (len > 0) {
         memcpy(uat.srBuffer + uat.srBufferPos, data, len);
         uat.srBufferPos += len;
         uat.srBuffer[uat.srBufferPos] = '\0'; // Ensure null termination
+        return true;
     }
+    
+    return false;
 }
 
+/**
+ * @brief Command handler for SendReceive operations
+ * 
+ * This function is called when the expected response is received during
+ * a SendReceive operation. It signals the waiting task that the response
+ * has been received.
+ * 
+ * @param args Arguments passed to the handler (unused)
+ */
 static void uAT_CommandHandler_SendReceive(const char *args)
 {
+    (void)args; // Unused parameter
+    
     // Signal that we've received the expected response
     xSemaphoreGive(uat.sendReceiveSem);
 }
 
-// Helper function to safely clean up SendReceive state
+/**
+ * @brief Helper function to safely clean up SendReceive state
+ * 
+ * @param expected Expected response string that was registered
+ */
 static void uAT_CleanupSendReceiveState(const char *expected)
 {
     // This function should be called with handlerMutex already taken
-    uAT_UnregisterCommand(expected);
+    if (expected != NULL) {
+        uAT_UnregisterCommand(expected);
+    }
+    
+    // Reset SendReceive state
     uat.inSendReceive = false;
     uat.srBuffer = NULL;
     uat.srBufferSize = 0;
     uat.srBufferPos = 0;
 }
 
-// Helper function to take mutex and clean up SendReceive state
-static void uAT_SafeCleanupSendReceiveState(const char *expected, TickType_t timeoutTicks)
+/**
+ * @brief Helper function to take mutex and clean up SendReceive state
+ * 
+ * @param expected Expected response string that was registered
+ * @param timeoutTicks Maximum time to wait for mutex acquisition
+ * @return true if cleanup was successful, false otherwise
+ */
+static bool uAT_SafeCleanupSendReceiveState(const char *expected, TickType_t timeoutTicks)
 {
+    // Try to acquire mutex with timeout
     if (xSemaphoreTake(uat.handlerMutex, timeoutTicks) == pdTRUE) {
         uAT_CleanupSendReceiveState(expected);
         xSemaphoreGive(uat.handlerMutex);
+        return true;
     }
+    return false;
 }
 
-// Helper function to set up SendReceive state
+/**
+ * @brief Helper function to set up SendReceive state
+ * 
+ * @param expected Expected response string to register
+ * @param outBuf Buffer to store the response
+ * @param bufLen Size of the buffer
+ * @return UAT_OK if setup was successful, error code otherwise
+ */
 static uAT_Result_t uAT_SetupSendReceiveState(const char *expected, char *outBuf, size_t bufLen)
 {
     // This function should be called with handlerMutex already taken
+    
+    // Validate parameters
+    if (expected == NULL || outBuf == NULL || bufLen == 0) {
+        return UAT_ERR_INVALID_ARG;
+    }
     
     // Set up the SendReceive state
     uat.inSendReceive = true;
@@ -363,9 +542,14 @@ static uAT_Result_t uAT_SetupSendReceiveState(const char *expected, char *outBuf
     uat.srBufferSize = bufLen;
     uat.srBufferPos = 0;
     
+    // Clear the output buffer
+    memset(outBuf, 0, bufLen);
+    
     // Register the command handler for the expected response
     if (uat.cmdCount < UAT_MAX_CMD_HANDLERS) {
-        uat.cmdHandlers[uat.cmdCount++] = (uAT_CommandEntry){expected, uAT_CommandHandler_SendReceive};
+        uat.cmdHandlers[uat.cmdCount].command = expected;
+        uat.cmdHandlers[uat.cmdCount].handler = uAT_CommandHandler_SendReceive;
+        uat.cmdCount++;
         return UAT_OK;
     }
     
@@ -390,19 +574,25 @@ static uAT_Result_t uAT_SetupSendReceiveState(const char *expected, char *outBuf
  * 
  * @param cmd Command to send
  * @param expected Expected response prefix till end of line
- * @param outBuf Buffer to store the response from beginning of the response till end of line of the `expected` prefix
+ * @param outBuf Buffer to store the response
  * @param bufLen Size of outBuf
  * @param timeoutTicks Maximum time to wait for response
  * @return UAT_OK on success, error code otherwise
  */
 uAT_Result_t uAT_SendReceive(const char *cmd, const char *expected, char *outBuf, size_t bufLen, TickType_t timeoutTicks)
 {
+    // Validate input parameters
     if (!cmd || !expected || !outBuf || bufLen == 0) {
         return UAT_ERR_INVALID_ARG;
     }
 
+    // Validate expected response isn't too long
+    if (strlen(expected) >= UAT_RX_BUFFER_SIZE) {
+        return UAT_ERR_INVALID_ARG;
+    }
+
     // Clear the output buffer
-    outBuf[0] = '\0';
+    memset(outBuf, 0, bufLen);
     
     // 1) Serialize access to SendReceive operation
     if (xSemaphoreTake(uat.handlerMutex, timeoutTicks) != pdTRUE) {
@@ -417,15 +607,17 @@ uAT_Result_t uAT_SendReceive(const char *cmd, const char *expected, char *outBuf
     
     // Set up the SendReceive state
     uAT_Result_t result = uAT_SetupSendReceiveState(expected, outBuf, bufLen);
-    xSemaphoreGive(uat.handlerMutex);
-    
     if (result != UAT_OK) {
+        xSemaphoreGive(uat.handlerMutex);
         return UAT_ERR_INT;
     }
     
+    // Release the mutex before sending command
+    xSemaphoreGive(uat.handlerMutex);
+    
     // 2) Send the AT command
-    printf("Sending command: %s\n", cmd);
-    if (UAT_OK != uAT_SendCommand(cmd)) {
+    result = uAT_SendCommand(cmd);
+    if (result != UAT_OK) {
         uAT_SafeCleanupSendReceiveState(expected, timeoutTicks);
         return UAT_ERR_SEND_FAIL;
     }
@@ -486,20 +678,46 @@ uAT_Result_t uAT_SendCommand(const char *cmd)
  */
 static bool uAT_DispatchCommand(const char *line, size_t len)
 {
+    // Validate input parameters
+    if (!line || len == 0 || len >= UAT_RX_BUFFER_SIZE) {
+        return false;
+    }
     
+    // Ensure line is null-terminated for safety
+    char safe_line[UAT_RX_BUFFER_SIZE];
+    if (len >= UAT_RX_BUFFER_SIZE - 1) {
+        len = UAT_RX_BUFFER_SIZE - 2; // Leave room for null terminator
+    }
+    memcpy(safe_line, line, len);
+    safe_line[len] = '\0';
+    
+    // Search for matching command handler
     for (size_t i = 0; i < uat.cmdCount; i++) {
         const char *cmd = uat.cmdHandlers[i].command;
+        if (!cmd) continue; // Skip invalid entries
+        
         size_t cmdLen = strlen(cmd);
-        // 
-        if (strncmp(line, cmd, cmdLen) == 0) {
-            const char *args = line + cmdLen;
-            // Skip leading spaces in the 
+        if (cmdLen == 0) continue; // Skip empty commands
+        
+        // Check if command matches
+        if (strncmp(safe_line, cmd, cmdLen) == 0) {
+            // Get arguments (safely)
+            const char *args = safe_line + cmdLen;
+            
+            // Skip leading spaces
             while (*args == ' ') {
                 args++;
             }
             
             // Store handler to call after releasing mutex
             uAT_CommandHandler handler = uat.cmdHandlers[i].handler;
+            
+            // Validate handler before calling
+            if (!handler) {
+                xSemaphoreGive(uat.handlerMutex);
+                return false;
+            }
+            
             xSemaphoreGive(uat.handlerMutex);
             
             // Call handler outside critical section
@@ -507,15 +725,12 @@ static bool uAT_DispatchCommand(const char *line, size_t len)
             return true;
         }
     }
+    
     return false;
 }
 
 /**
- * @brief Halpe function that receive data from a stream buffer until a delimiter is found
- *
- * Reads characters from the stream buffer into a destination buffer until
- * either the maximum length is reached, the delimiter is found, or no more
- * data is available within the specified timeout.
+ * @brief Helper function to receive data from a stream buffer until a delimiter is found
  *
  * @param stream Stream buffer to read from
  * @param dest Destination buffer to store received characters
@@ -531,18 +746,52 @@ size_t xStreamBufferReceiveUntilDelimiter(
     const char *delim,
     TickType_t ticksToWait)
 {
+    // Validate parameters
+    if (stream == NULL || dest == NULL || maxLen < 2 || delim == NULL) {
+        return 0;
+    }
+    
     size_t total = 0;
     char ch;
-    while (total < maxLen - 1)
-    {
-        if (xStreamBufferReceive(stream, &ch, 1, ticksToWait) != 1)
+    TickType_t xTimeToWait = ticksToWait;
+    TimeOut_t xTimeOut;
+    
+    // Initialize timeout
+    vTaskSetTimeOutState(&xTimeOut);
+    
+    // Clear destination buffer
+    memset(dest, 0, maxLen);
+    
+    while (total < maxLen - 1) {
+        // Check for timeout
+        if (xTaskCheckForTimeOut(&xTimeOut, &xTimeToWait) == pdTRUE) {
             break;
+        }
+        
+        // Try to receive a character
+        if (xStreamBufferReceive(stream, &ch, 1, xTimeToWait) != 1) {
+            break;
+        }
+        
+        // Store the character
         dest[total++] = ch;
-        dest[total] = '\0';
-        if (strstr(dest, delim))
-            break;
+        dest[total] = '\0'; // Ensure null termination
+        
+        // Check if we've found the delimiter
+        if (total >= strlen(delim)) {
+            if (strstr(dest + total - strlen(delim), delim) != NULL) {
+                break;
+            }
+        }
     }
-    dest[total] = '\0';
+    
+    // Ensure null termination
+    if (total < maxLen) {
+        dest[total] = '\0';
+    } else {
+        dest[maxLen - 1] = '\0';
+    }
+    
     return total;
 }
 
@@ -558,49 +807,75 @@ size_t xStreamBufferReceiveUntilDelimiter(
 void uAT_Task(void *params)
 {
     (void)params;
-    uint8_t lineBuf[UAT_RX_BUFFER_SIZE];
+    char lineBuf[UAT_RX_BUFFER_SIZE];
+    
+    // Task initialization
     printf("uAT_Task started\r\n");
 
+    // Main task loop
     while (1) {
+        // Clear buffer for safety
+        memset(lineBuf, 0, sizeof(lineBuf));
+        
+        // Wait for data with timeout
         size_t len = xStreamBufferReceiveUntilDelimiter(
             uat.rxStream,
-            (char *)lineBuf,
+            lineBuf,
             sizeof(lineBuf),
             UAT_LINE_TERMINATOR,
             pdMS_TO_TICKS(1000));
 
         if (len > 0) {
+            // Try to acquire mutex with timeout
             if (xSemaphoreTake(uat.handlerMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
                 // Always capture response if in SendReceive mode
-                if (uat.inSendReceive) {
-                    uAT_AppendToResponseBuffer((char *)lineBuf, len);
+                if (uat.inSendReceive && uat.srBuffer != NULL) {
+                    uAT_AppendToResponseBuffer(lineBuf, len);
                 }
                 
                 // Dispatch to appropriate handler
-                if (!uAT_DispatchCommand((char *)lineBuf, len)) {
-                    // No handler found
+                if (!uAT_DispatchCommand(lineBuf, len)) {
+                    // No handler found, release mutex
                     xSemaphoreGive(uat.handlerMutex);
                 }
+                // Note: If handler found, the dispatch function releases the mutex
             }
+            // If we couldn't get the mutex, we'll try again on the next iteration
         }
         
+        // Short delay to prevent CPU hogging
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
-
+/**
+ * @brief  Reset the AT command interface
+ * @return UAT_OK on success, or appropriate error code on failure
+ */
 uAT_Result_t uAT_Reset(void)
 {
+    // Validate UART handle
+    if (uat.huart == NULL)
+    {
+        return UAT_ERR_INVALID_ARG;
+    }
+
     // Stop any ongoing transfers
     HAL_UART_AbortReceive(uat.huart);
     HAL_UART_AbortTransmit(uat.huart);
-    
+
     // Clear stream buffer
-    xStreamBufferReset(uat.rxStream);
-    
+    if (uat.rxStream != NULL)
+    {
+        xStreamBufferReset(uat.rxStream);
+    }
+
+#ifdef UAT_USE_DMA
     // Reset DMA
     dma_last_pos = 0;
-    if (HAL_UART_Receive_DMA(uat.huart, uart_dma_rx_buf, UART_DMA_RX_SIZE) != HAL_OK)
+
+    // Restart DMA reception
+    if (HAL_UART_Receive_DMA(uat.huart, uart_dma_rx_buf, UAT_DMA_RX_SIZE) != HAL_OK)
     {
         return UAT_ERR_INIT_FAIL;
     }
@@ -608,6 +883,14 @@ uAT_Result_t uAT_Reset(void)
     // Re-enable IDLE interrupt
     __HAL_UART_CLEAR_IDLEFLAG(uat.huart);
     __HAL_UART_ENABLE_IT(uat.huart, UART_IT_IDLE);
+#else
+    // Restart interrupt-driven reception
+    static uint8_t rxByte;
+    if (HAL_UART_Receive_IT(uat.huart, &rxByte, 1) != HAL_OK)
+    {
+        return UAT_ERR_INIT_FAIL;
+    }
+#endif
 
     return UAT_OK;
 }
@@ -625,22 +908,45 @@ uAT_Result_t uAT_Reset(void)
  */
 uAT_Result_t uAT_RegisterURC(const char *cmd, uAT_CommandHandler handler)
 {
+    // Validate input parameters
     if (!cmd || !handler) {
         return UAT_ERR_INVALID_ARG;
     }
+    
+    // Check command length
+    size_t cmdLen = strlen(cmd);
+    if (cmdLen == 0 || cmdLen >= UAT_RX_BUFFER_SIZE) {
+        return UAT_ERR_INVALID_ARG;
+    }
 
-    if (xSemaphoreTake(uat.handlerMutex, portMAX_DELAY) != pdTRUE)
+    // Try to acquire mutex with timeout
+    if (xSemaphoreTake(uat.handlerMutex, portMAX_DELAY) != pdTRUE) {
         return UAT_ERR_BUSY;
+    }
 
+    // Check if command already exists
+    for (size_t i = 0; i < uat.cmdCount; i++) {
+        if (strcmp(uat.cmdHandlers[i].command, cmd) == 0) {
+            // Remove existing entry to reinsert at the beginning
+            for (size_t j = i; j < uat.cmdCount - 1; j++) {
+                uat.cmdHandlers[j] = uat.cmdHandlers[j + 1];
+            }
+            uat.cmdCount--;
+            break;
+        }
+    }
+    
+    // Check if we have space for a new handler
     uAT_Result_t result = UAT_ERR_RESOURCE;
     if (uat.cmdCount < UAT_MAX_CMD_HANDLERS) {
-        // Shift existing handlers to make room at the beginning
+        // Shift all handlers to make room at the beginning
         for (size_t i = uat.cmdCount; i > 0; i--) {
             uat.cmdHandlers[i] = uat.cmdHandlers[i-1];
         }
         
         // Insert the URC handler at the beginning
-        uat.cmdHandlers[0] = (uAT_CommandEntry){cmd, handler};
+        uat.cmdHandlers[0].command = cmd;
+        uat.cmdHandlers[0].handler = handler;
         uat.cmdCount++;
         result = UAT_OK;
     }
