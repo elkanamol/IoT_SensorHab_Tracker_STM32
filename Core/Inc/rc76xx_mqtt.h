@@ -5,12 +5,58 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#define RC76XX_DEBUG_LEVEL RC76XX_DEBUG_LEVEL_VERBOSE
+
+//===========================================================================
+//  Debug configuration
+//===========================================================================
+// Debug levels
+#define RC76XX_DEBUG_LEVEL_NONE    0
+#define RC76XX_DEBUG_LEVEL_ERROR   1
+#define RC76XX_DEBUG_LEVEL_WARNING 2
+#define RC76XX_DEBUG_LEVEL_INFO    3
+#define RC76XX_DEBUG_LEVEL_VERBOSE 4
+
+// Set the current debug level (can be overridden in build system)
+#ifndef RC76XX_DEBUG_LEVEL
+#define RC76XX_DEBUG_LEVEL RC76XX_DEBUG_LEVEL_NONE
+#endif
+
+// Debug macros for different levels
+#if RC76XX_DEBUG_LEVEL >= RC76XX_DEBUG_LEVEL_ERROR
+#define RC76XX_ERROR(fmt, ...) printf("[%lu] ERROR: " fmt, HAL_GetTick(), ##__VA_ARGS__)
+#else
+#define RC76XX_ERROR(fmt, ...) do {} while(0)
+#endif
+
+#if RC76XX_DEBUG_LEVEL >= RC76XX_DEBUG_LEVEL_WARNING
+#define RC76XX_WARNING(fmt, ...) printf("[%lu] WARNING: " fmt, HAL_GetTick(), ##__VA_ARGS__)
+#else
+#define RC76XX_WARNING(fmt, ...) do {} while(0)
+#endif
+
+#if RC76XX_DEBUG_LEVEL >= RC76XX_DEBUG_LEVEL_INFO
+#define RC76XX_INFO(fmt, ...) printf("[%lu] INFO: " fmt, HAL_GetTick(), ##__VA_ARGS__)
+#else
+#define RC76XX_INFO(fmt, ...) do {} while(0)
+#endif
+
+#if RC76XX_DEBUG_LEVEL >= RC76XX_DEBUG_LEVEL_VERBOSE
+#define RC76XX_VERBOSE(fmt, ...) printf("[%lu] VERBOSE: " fmt, HAL_GetTick(), ##__VA_ARGS__)
+#else
+#define RC76XX_VERBOSE(fmt, ...) do {} while(0)
+#endif
+
+// Always print critical messages regardless of debug level
+#define RC76XX_CRITICAL(fmt, ...) printf("[%lu] CRITICAL: " fmt, HAL_GetTick(), ##__VA_ARGS__)
+
 #define RC76XX_IMEI_LEN 16
 #define RC76XX_MODEL_LEN 32
 #define RC76XX_IP_LEN 16
 #define RC76XX_CLIENTID_LEN 32
 #define RC76XX_TOPIC_LEN 64
 #define RC76XX_PAYLOAD_LEN 128
+#define RC76XX_RX_PAYLOAD_LEN 1024
 
 /**
  * @brief Enumeration of possible result codes for the RC76xx driver
@@ -21,12 +67,14 @@
 typedef enum
 {
     RC76XX_OK = 0,
-    RC76XX_ERR_INTERNAL,
     RC76XX_ERR_AT,
     RC76XX_ERR_PARSE,
     RC76XX_ERR_STATE,
-    RC76XX_ERR_BUFFER_OVERFLOW, // New error code
-    RC76XX_ERR_TIMEOUT,
+    RC76XX_ERR_INTERNAL,
+    RC76XX_ERR_BUFFER_OVERFLOW,
+    RC76XX_ERR_INVALID_PARAM,  // New: for invalid parameters
+    RC76XX_ERR_CME,            // New: for CME errors
+    RC76XX_ERR_CMS             // New: for CMS errors
 } RC76XX_Result_t;
 
 /**
