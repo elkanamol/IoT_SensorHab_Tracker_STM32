@@ -692,12 +692,12 @@ void rc76xx_reset_handler(const char *args)
 {
     if (!g_mqtt_handle)
     {
-        RC76XX_ERROR("[%lu] >>> RC76xx modem has reset but no handle available!", HAL_GetTick());
+        RC76XX_ERROR("[%lu] >>> RC76xx modem has reset but no handle available!\r\n", HAL_GetTick());
         return;
     }
 
     g_mqtt_handle->state = RC76XX_STATE_RESET;
-    RC76XX_INFO("[%lu] >>> RC76xx modem has reset!!, state transition to RC76XX_STATE_RESET:", HAL_GetTick());
+    RC76XX_INFO("[%lu] >>> RC76xx modem has reset!!, state transition to RC76XX_STATE_RESET:\r\n", HAL_GetTick());
 }
 
 // This will be called whenever a line "OK\r\n" arrives.

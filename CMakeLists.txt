@@ -51,6 +51,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/uat_freertos.c
     Core/Src/uat_parser.c
     Core/Src/rc76xx_mqtt.c
+    Core/Src/bme280_porting.c
+    Core/Src/bme280.c
 )
 
 # Add include paths

@@ -20,6 +20,7 @@
 #include "main.h"
 #include "cmsis_os.h"
 #include "dma.h"
+#include "i2c.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -31,6 +32,9 @@
 #include "string.h"
 #include "mqtt_secrets.h"
 #include "stdlib.h"
+
+#include "bme280.h"
+#include "bme280_porting.h"
 
 /* USER CODE END Includes */
 
@@ -53,7 +57,11 @@
 
 /* USER CODE BEGIN PV */
 extern UART_HandleTypeDef huart2;
+extern I2C_HandleTypeDef hi2c1;
 static RC76XX_Handle_t mqttHandle;
+struct bme280_dev bme_device;
+struct bme280_data bme_comp_data;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -62,121 +70,19 @@ void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
 // static void App_Task(void *pvParameters);
 static void MQTT_Task(void *pvParameters);
+void StartBme280Task(void *argument);
 
 /* USER CODE END PFP */
 
-// /* Private user code ---------------------------------------------------------*/
-// /* USER CODE BEGIN 0 */
-
-// /* creg_handler: called whenever a line beginning with "+CREG" is received */
-// void creg_handler(const char *args)
-// {
-//   // args might be e.g. ": 1" or ": 0,1"
-//   printf("[%lu] >>> Network registration URC: %s", HAL_GetTick(), args);
-//   if (strcmp(args, ": 1,1") == 0)
-//   {
-//     printf("[%lu] >>> Network EPS registration successful", HAL_GetTick());
-//   }
-// }
-
-// /* creg_handler: called whenever a line beginning with "+CREG" is received */
-// void cgreg_handler(const char *args)
-// {
-//   // args might be e.g. ": 1" or ": 0,1"
-//   printf("[%lu] >>> Network registration URC: %s", HAL_GetTick(), args);
-//   if (strcmp(args, ": 1") == 0)
-//   {
-//     printf("[%lu] >>> Network GPRS registration successful!!", HAL_GetTick());
-//   }
-// }
-// /* mqtt_data_handler: called whenever a line beginning with "+MQTT_DATA" is received
-//  TODO: also add logic to handle the MQTT data payload*/
-// void mqtt_data_handler(const char *args)
-// {
-//   // +KMQTT_DATA: 0,"home/LWTMessage","Test 40447"
-//   printf("[%lu] >>> MQTT data URC: %s", HAL_GetTick(), args);
-//   // extract the data, "home/LWTMessage" => topic, "Test 40447" => payload
-//   // char topic[100] = {""};
-//   // char payload[1024] = {""};
-//   // sscanf(args, "0,%[^,],%[^,]", topic, payload);
-//   // printf("[%lu] >>> MQTT data topic: %s, payload: %s", HAL_GetTick(), topic, payload);
-// }
-
-// /* @brief: called whenever a line beginning with "+MQTT_IND" is received
-//  * the standard data is : "+KMQTT_IND: 0,4"
-//  * 0 —Connection aborted error
-//  * 1 —Connection successful (CONNACK received from the MQTT broker)
-//  * 2 —Subscribed to a topic successful (SUBACK received from the MQTT broker)
-//  * 3 —Unsubscribed to a topic successful (UNSUBACK received from the MQTT broker)
-//  * 4 —Message published successful (PUBACK received from the MQTT broker)
-//  * 5 —Generic error
-//  * 6 —Socket open successful
-//  * @param args: the URC string
-//  */
-// void mqtt_ind_handler(const char *args)
-// {
-//   // args might be e.g. ": 0" or ": 1"
-//   printf("[%lu] >>> MQTT indication URC: %s", HAL_GetTick(), args);
-//   switch (atol(args))
-//   {
-//   case 0:
-//     printf("[%lu] >>> MQTT connection aborted\n", HAL_GetTick());
-//     mqttHandle.state = RC76XX_STATE_ERROR;
-//     break;
-//   case 1:
-//     printf("[%lu] >>> MQTT connection successful\n", HAL_GetTick());
-//     mqttHandle.state = RC76XX_STATE_MQTT_CONNECTED;
-//     break;
-//   case 2:
-//     printf("[%lu] >>> MQTT subscribed to a topic successful\n", HAL_GetTick());
-//     break;
-//   case 3:
-//     printf("[%lu] >>> MQTT unsubscribed to a topic successful\n", HAL_GetTick());
-//     break;
-//   case 4:
-//     printf("[%lu] >>> MQTT message published successful\n", HAL_GetTick());
-//     break;
-//   case 5:
-//     printf("[%lu] >>> MQTT generic error\n", HAL_GetTick());
-//     mqttHandle.state = RC76XX_STATE_ERROR;
-//     break;
-//   case 6:
-//     printf("[%lu] >>> MQTT socket open successful\n", HAL_GetTick());
-//     mqttHandle.state = RC76XX_STATE_MQTT_CONNECTING;
-//     break;
-//   default:
-//     printf("[%lu] >>> MQTT unknown indication\n", HAL_GetTick());
-//     break;
-//   }
-// }
-
-// // reset handler to handel the reset URC from the module
-// void reset_handler(const char *args)
-// {
-//   mqttHandle.state = RC76XX_STATE_RESET;
-//   printf("[%lu] >>> RC76xx modem has reset!!, state transition to RC76XX_STATE_RESET:", HAL_GetTick());
-// }
-
-// // This will be called whenever a line “OK\r\n” arrives.
-// void ok_handler(const char *args)
-// {
-//   // args points just past the “OK” in your buffer.
-//   // Since the default terminator is “\r\n”, args will typically
-//   // be just “\r\n” (or the empty string if you trimmed CRLF yourself).
-//   printf("[%lu] >>> Got OK response%s", HAL_GetTick(), args);
-// }
-// // This will be called whenever a line “OK\r\n” arrives.
-// void error_handler(const char *args)
-// {
-//   printf("[%lu] >>> Got OK response%s", HAL_GetTick(), args);
-// }
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
 
 /* USER CODE END 0 */
 
 /**
-  * @brief  The application entry point.
-  * @retval int
-  */
+ * @brief  The application entry point.
+ * @retval int
+ */
 int main(void)
 {
 
@@ -205,6 +111,7 @@ int main(void)
   MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_USART3_UART_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
   // Initialize uAT parser on huart3
@@ -217,25 +124,6 @@ int main(void)
   }
   printf("uAT parser initialized\n");
 
-
-  // result = uAT_RegisterURC("+CGREG", cgreg_handler);
-  // if (result != UAT_OK)
-  // {
-  //   printf("Failed to register +CGREG handler: %d\n", result);
-  // }
-
-  // result = uAT_RegisterCommand("OK", ok_handler);
-  // if (result != UAT_OK) {
-  //   printf("Failed to register OK handler: %d\n", result);
-  // }
-  // result = uAT_RegisterCommand("ERROR", error_handler);
-  // if (result != UAT_OK)
-  // {
-  //   printf("Failed to register ERROR handler: %d\n", result);
-  // }
-
-  // retval = ATC_SendReceive(&hAtc, "ATI\r\n", 1000, NULL, 1000, 2, "\r\nOK\r\n", "\r\nERROR\r\n");
-  // printf("ATC_SendReceive returned %d\n", retval);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -266,6 +154,14 @@ int main(void)
               tskIDLE_PRIORITY + 1,
               NULL);
 
+  // Create the BME280 task
+  xTaskCreate(StartBme280Task,
+              "BME280_Task",
+              512, // Adjust stack size as needed
+              NULL,
+              tskIDLE_PRIORITY + 1,
+              NULL);
+
   /* Start scheduler */
   osKernelStart();
 
@@ -284,35 +180,42 @@ int main(void)
 }
 
 /**
-  * @brief System Clock Configuration
-  * @retval None
-  */
+ * @brief System Clock Configuration
+ * @retval None
+ */
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Configure LSE Drive Capability
-  */
+   */
   HAL_PWR_EnableBkUpAccess();
 
   /** Configure the main internal regulator output voltage
-  */
+   */
   __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
+   * in the RCC_OscInitTypeDef structure.
+   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 4;
-  RCC_OscInitStruct.PLL.PLLN = 72;
+  RCC_OscInitStruct.PLL.PLLN = 216;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 3;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Activate the Over-Drive mode
+   */
+  if (HAL_PWREx_EnableOverDrive() != HAL_OK)
   {
     Error_Handler();
   }
@@ -323,10 +226,10 @@ void SystemClock_Config(void)
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_7) != HAL_OK)
   {
     Error_Handler();
   }
@@ -432,12 +335,10 @@ static void MQTT_Task(void *argument)
   const char *user = SECRET_MQTT_USERNAME;
   const char *pass = SECRET_MQTT_PASSWORD;
   const char *subTopic = "channels/2956054/subscribe";
-  const char *pubTopic = "channels/2956054/publish/fields/field1";
-  const char *payload_prefix = "field1=";
-
+  const char *pubTopic = "channels/2956054/publish";
 
   printf("Configuring MQTT %s:%u, ClientID=%s...\r\n",
-                                                     broker, 1883, clientID);
+         broker, 1883, clientID);
   res = RC76XX_ConfigMQTT(&mqttHandle, broker, port, clientID, pubTopic, user, pass, false, false, 120);
   if (res != RC76XX_OK)
   {
@@ -457,14 +358,9 @@ static void MQTT_Task(void *argument)
   vTaskDelay(delay);
   printf("MQTT connected\r\n");
 
-  // result = uAT_RegisterURC("+QCEUICCSUPPORT:0", reset_handler);
-  // if (result != UAT_OK)
-  // {
-  //   printf("Failed to register +CREG handler: %d\n", result);
-  // }
   printf("Registered +KMQTT_DATA handler\r\n");
   /* Subscribe to a topic */
-  
+
   // const char *subTopic = "home/LWTMessage";
   printf("Subscribing to %s...\r\n", subTopic);
   res = RC76XX_Subscribe(&mqttHandle, subTopic);
@@ -476,15 +372,26 @@ static void MQTT_Task(void *argument)
   {
     printf("Subscribe failed: %d\r\n", res);
   }
-  /* 5) In a loop, publish and subscribe */
   for (;;)
   {
 
     uint32_t now = HAL_GetTick();
     /* Publish a message */
     // const char *pubTopic = "home/LWTMessage";
-    char payload[100] = {""};
-    sprintf(payload, "%lu", now);
+    // Format BME280 data into MQTT payload for ThingSpeak
+    char payload[100]; // Make sure this is large enough for your payload
+    bme_calc_data_int_t bme_calc_data;
+
+    // // Convert floating-point values to integer components
+    convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
+
+    // Format the payload
+    sprintf(payload, "field1=%ld.%02ld&field2=%lu.%02lu&field3=%lu.%02lu",
+            bme_calc_data.temp_whole, bme_calc_data.temp_frac,
+            bme_calc_data.press_whole, bme_calc_data.press_frac,
+            bme_calc_data.hum_whole, bme_calc_data.hum_frac);
+
+    printf("MQTT Payload: %s\r\n", payload);
     printf("Publishing to %s: %s\r\n", pubTopic, payload);
     res = RC76XX_Publish(&mqttHandle, pubTopic, payload);
     if (res == RC76XX_OK)
@@ -501,58 +408,155 @@ static void MQTT_Task(void *argument)
   }
 }
 
-// // Example application task
-// static void App_Task(void *pvParameters)
-// {
-//   (void)pvParameters; // ignore unused parameter
-//   printf("Application task started\r\n");
-//   char myBuff[1024];
-//   uAT_Result_t result;
+// Task function for BME280
+void StartBme280Task(void *argument)
+{
+  (void)argument;
+  int8_t rslt;
+  uint32_t meas_delay;
+  struct bme280_settings settings;
 
-//   for (;;)
-//   {
-//     // e.g. periodically send an AT command
-//     printf("[%lu] sending 'AT' command\r\n", HAL_GetTick());
-//     result = uAT_SendCommand("AT");
-//     if (result != UAT_OK) {
-//       printf("Failed to send AT command: %d\r\n", result);
-//     }
-//     vTaskDelay(pdMS_TO_TICKS(1000));
+  // Initialize the BME280 interface porting layer
+  // Use BME280_I2C_ADDR_PRIM (0x76) or BME280_I2C_ADDR_SEC (0x77)
+  rslt = bme280_interface_init(&bme_device, &hi2c1, BME280_I2C_ADDR_PRIM);
+  if (rslt != BME280_OK)
+  {
+    printf("Failed to initialize BME280 interface. Error: %d\r\n", rslt);
+    // Handle error: perhaps delete task or enter error loop
+    vTaskDelete(NULL);
+    return;
+  }
 
-//     printf("[%lu] sending 'AT+CREG?' command\r\n", HAL_GetTick());
-//     result = uAT_SendCommand("AT+CREG?");
-//     if (result != UAT_OK) {
-//       printf("Failed to send AT+CREG? command: %d\r\n", result);
-//     }
-//     vTaskDelay(pdMS_TO_TICKS(1000));
+  // Initialize the BME280 sensor
+  rslt = bme280_init(&bme_device);
+  if (rslt != BME280_OK)
+  {
+    printf("Failed to initialize BME280 sensor. Error: %d\r\n", rslt);
+    // Handle error
+    bme280_interface_deinit(&bme_device); // Clean up interface resources
+    vTaskDelete(NULL);
+    return;
+  }
+  printf("BME280 initialized successfully. Chip ID: 0x%X\r\n", bme_device.chip_id);
+  vTaskDelay(10);
+  // Configure sensor settings (example: normal mode, standard oversampling)
+  // First get the current settings
+  rslt = bme280_get_sensor_settings(&settings, &bme_device);
+  if (rslt != BME280_OK)
+  {
+    printf("Failed to get BME280 sensor settings. Error: %d\r\n", rslt);
+    bme280_interface_deinit(&bme_device);
+    vTaskDelete(NULL);
+    return;
+  }
+  vTaskDelay(10);
 
-//     printf("[%lu] sending 'AT!GSTATUS?' command\r\n", HAL_GetTick());
-//     result = uAT_SendCommand("AT!GSTATUS?");
-//     if (result != UAT_OK) {
-//       printf("Failed to send AT!GSTATUS? command: %d\r\n", result);
-//     }
-//     vTaskDelay(pdMS_TO_TICKS(1000));
+  // Now modify the settings
+  settings.osr_h = BME280_OVERSAMPLING_1X;
+  settings.osr_p = BME280_OVERSAMPLING_4X;
+  settings.osr_t = BME280_OVERSAMPLING_2X;
+  settings.filter = BME280_FILTER_COEFF_OFF;
+  settings.standby_time = BME280_STANDBY_TIME_1000_MS; // Example, adjust as needed
 
-//     if (uAT_UnregisterCommand("OK") != UAT_OK)
-//     {
-//       printf("Failed to unregister command\r\n");
-//     }
+  // Apply settings one by one instead of all at once
 
-//     result = uAT_SendReceive("ATI", "OK", myBuff, sizeof(myBuff), pdMS_TO_TICKS(1000));
-//     if (result != UAT_OK) {
-//       printf("Failed to uAT_SendReceive command: %d\r\n", result);
-//     } else {
-//       printf("[%lu] received: \n\n%s\r\n", HAL_GetTick(), myBuff);
-//     }
+  // First apply humidity settings
+  rslt = bme280_set_sensor_settings(BME280_SEL_OSR_HUM, &settings, &bme_device);
+  if (rslt != BME280_OK)
+  {
+    printf("Failed to set humidity settings. Error: %d\r\n", rslt);
+  }
+  HAL_Delay(5);
 
-//     result = uAT_RegisterCommand("OK", ok_handler);
-//     if (result != UAT_OK) {
-//       printf("Failed to re-register OK handler: %d\r\n", result);
-//     }
+  // Then apply temperature and pressure settings
+  rslt = bme280_set_sensor_settings(BME280_SEL_OSR_TEMP | BME280_SEL_OSR_PRESS, &settings, &bme_device);
+  if (rslt != BME280_OK)
+  {
+    printf("Failed to set temp/press settings. Error: %d\r\n", rslt);
+  }
+  HAL_Delay(5);
 
-//     vTaskDelay(pdMS_TO_TICKS(5000));
-//   }
-// }
+  // Finally apply filter and standby settings
+  rslt = bme280_set_sensor_settings(BME280_SEL_FILTER | BME280_SEL_STANDBY, &settings, &bme_device);
+  if (rslt != BME280_OK)
+  {
+    printf("Failed to set filter/standby settings. Error: %d\r\n", rslt);
+  }
+
+  // Set the sensor to normal mode
+  rslt = bme280_set_sensor_mode(BME280_POWERMODE_NORMAL, &bme_device);
+  if (rslt != BME280_OK)
+  {
+    printf("Failed to set BME280 sensor mode. Error: %d\r\n", rslt);
+    // Handle error
+    bme280_interface_deinit(&bme_device);
+    vTaskDelete(NULL);
+    return;
+  }
+
+  printf("Waiting for first measurement to complete...\r\n");
+  HAL_Delay(50);
+  uint8_t status;
+  do
+  {
+    rslt = bme280_get_regs(BME280_REG_STATUS, &status, 1, &bme_device);
+    HAL_Delay(10);
+  } while (rslt == BME280_OK && (status & BME280_STATUS_MEAS_DONE) != 0);
+  printf("First measurement complete, status: 0x%02X\r\n", status);
+
+  // Calculate the minimum delay required between measurements based on settings
+  rslt = bme280_cal_meas_delay(&meas_delay, &settings);
+  if (rslt != BME280_OK)
+  {
+    printf("Failed to calculate measurement delay. Error: %d\r\n", rslt);
+    // Handle error, but can continue
+  }
+  else
+  {
+    printf("Calculated measurement delay: %lu us\r\n", (unsigned long)meas_delay);
+  }
+
+  for (;;)
+  {
+    // Set sensor to forced mode (takes one measurement then goes to sleep)
+    rslt = bme280_set_sensor_mode(BME280_POWERMODE_FORCED, &bme_device);
+    if (rslt != BME280_OK)
+    {
+      printf("Failed to set forced mode: %d\r\n", rslt);
+    }
+
+    // Wait for the measurement to complete
+    HAL_Delay(50); // Short delay for measurement to start
+    uint8_t status;
+    do
+    {
+      rslt = bme280_get_regs(BME280_REG_STATUS, &status, 1, &bme_device);
+      HAL_Delay(10);
+    } while (rslt == BME280_OK && (status & BME280_STATUS_MEAS_DONE) != 0);
+
+    // Now read the data
+    rslt = bme280_get_sensor_data(BME280_ALL, &bme_comp_data, &bme_device);
+    if (rslt == BME280_OK)
+    {
+      // convert the data to integer to allow working with printf with %ld and %lu
+      bme_calc_data_int_t bme_calc_data;
+      convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
+
+      printf("Temp: %ld.%02ld C, Press: %lu.%02lu hPa, Hum: %lu.%02lu %%\r\n",
+             bme_calc_data.temp_whole, bme_calc_data.temp_frac,
+             bme_calc_data.press_whole, bme_calc_data.press_frac,
+             bme_calc_data.hum_whole, bme_calc_data.hum_frac);
+    }
+    else
+    {
+      printf("Failed to get sensor data: %d\r\n", rslt);
+    }
+
+    // Wait before next reading
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+
 /* USER CODE END 4 */
 
 /**
