@@ -17,6 +17,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define STRTOL_BASE_10 10
+#define STRTOL_BASE_16 16
+
 /**
  * @brief Result codes for parsing operations
  */
@@ -26,33 +29,10 @@ typedef enum {
     UAT_PARSE_PREFIX_NOT_FOUND, ///< Specified prefix not found
     UAT_PARSE_INVALID_FORMAT,   ///< Invalid format in the response
     UAT_PARSE_BUFFER_TOO_SMALL, ///< Destination buffer too small
-    UAT_PARSE_INVALID_VALUE     ///< Parsed value is invalid
+    UAT_PARSE_INVALID_VALUE,    ///< Parsed value is invalid
+    UAT_PARSE_OVERFLOW,         ///< Parsed value overflows the destination type
 } uAT_ParseResult_t;
 
-/**
- * @brief Check if a response contains a specific prefix
- *
- * @param response The response string to check
- * @param prefix The prefix to look for
- * @return true if the prefix is found, false otherwise
- */
-bool uAT_HasPrefix(const char *response, const char *prefix);
-
-/**
- * @brief Check if a response is an error response
- *
- * @param response The response string to check
- * @return true if the response is an error, false otherwise
- */
-bool uAT_IsError(const char *response);
-
-/**
- * @brief Check if a response is an OK response
- *
- * @param response The response string to check
- * @return true if the response is OK, false otherwise
- */
-bool uAT_IsOK(const char *response);
 
 /**
  * @brief Check if a response contains a CME error
