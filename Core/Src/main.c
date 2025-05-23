@@ -21,6 +21,7 @@
 #include "cmsis_os.h"
 #include "dma.h"
 #include "i2c.h"
+#include "spi.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -80,9 +81,9 @@ void StartBme280Task(void *argument);
 /* USER CODE END 0 */
 
 /**
- * @brief  The application entry point.
- * @retval int
- */
+  * @brief  The application entry point.
+  * @retval int
+  */
 int main(void)
 {
 
@@ -112,6 +113,7 @@ int main(void)
   MX_USART2_UART_Init();
   MX_USART3_UART_Init();
   MX_I2C1_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
 
   // Initialize uAT parser on huart3
@@ -130,37 +132,7 @@ int main(void)
   osKernelInitialize();
 
   /* Call init function for freertos objects (in cmsis_os2.c) */
-  // MX_FREERTOS_Init();
-  // Create the uAT parser task
-  xTaskCreate(uAT_Task,
-              "uAT_Task",
-              512, // stack depth in words
-              NULL,
-              tskIDLE_PRIORITY + 1,
-              NULL);
-
-  // // (Optional) your other application tasks
-  // xTaskCreate(App_Task,
-  //             "AppTask",
-  //             512,
-  //             NULL,
-  //             tskIDLE_PRIORITY + 1,
-  //             NULL);
-
-  xTaskCreate(MQTT_Task,
-              "MQTT_Task",
-              512 * 2,
-              NULL,
-              tskIDLE_PRIORITY + 1,
-              NULL);
-
-  // Create the BME280 task
-  xTaskCreate(StartBme280Task,
-              "BME280_Task",
-              512, // Adjust stack size as needed
-              NULL,
-              tskIDLE_PRIORITY + 1,
-              NULL);
+  MX_FREERTOS_Init();
 
   /* Start scheduler */
   osKernelStart();
@@ -180,26 +152,26 @@ int main(void)
 }
 
 /**
- * @brief System Clock Configuration
- * @retval None
- */
+  * @brief System Clock Configuration
+  * @retval None
+  */
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Configure LSE Drive Capability
-   */
+  */
   HAL_PWR_EnableBkUpAccess();
 
   /** Configure the main internal regulator output voltage
-   */
+  */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
-   * in the RCC_OscInitTypeDef structure.
-   */
+  * in the RCC_OscInitTypeDef structure.
+  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
@@ -214,7 +186,7 @@ void SystemClock_Config(void)
   }
 
   /** Activate the Over-Drive mode
-   */
+  */
   if (HAL_PWREx_EnableOverDrive() != HAL_OK)
   {
     Error_Handler();
