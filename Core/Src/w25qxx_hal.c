@@ -12,6 +12,13 @@ static W25Q_StatusTypeDef W25Q_WaitForReady(W25Q_HandleTypeDef *hflash, uint32_t
 static W25Q_StatusTypeDef W25Q_SendCmdAddress(W25Q_HandleTypeDef *hflash, uint8_t cmd, uint32_t address);
 static W25Q_StatusTypeDef W25Q_SendCmdAddressData(W25Q_HandleTypeDef *hflash, uint8_t cmd, uint32_t address, const uint8_t *pData, uint32_t size);
 
+// FreeRTOS specific private functions
+static void W25Q_Task(void *argument);
+static void W25Q_TxCpltCallback(W25Q_HandleTypeDef *hflash);
+static void W25Q_RxCpltCallback(W25Q_HandleTypeDef *hflash);
+static void W25Q_TxRxCpltCallback(W25Q_HandleTypeDef *hflash);
+static void W25Q_DMAErrorCallback(W25Q_HandleTypeDef *hflash);
+
 // Single global pointer to the W25Q handle
 static W25Q_HandleTypeDef* g_w25q_handle = NULL;
 
@@ -268,6 +275,194 @@ static W25Q_StatusTypeDef W25Q_SendCmdAddressData(W25Q_HandleTypeDef *hflash, ui
     return status;
 }
 
+/**
+ * @brief FreeRTOS task function for handling flash operations
+ * 
+ * @param argument Task argument (not used)
+ */
+static void W25Q_Task(void *argument)
+{
+    W25Q_HandleTypeDef *hflash = (W25Q_HandleTypeDef *)argument;
+    W25Q_QueueItem item;
+    W25Q_StatusTypeDef status;
+    
+    for (;;) {
+        // Wait for a command from the queue
+        if (xQueueReceive(hflash->cmd_queue, &item, portMAX_DELAY) == pdTRUE) {
+            // Take the mutex to ensure exclusive access to the flash
+            if (xSemaphoreTake(hflash->mutex, portMAX_DELAY) == pdTRUE) {
+                // Process the command
+                switch (item.cmd_type) {
+                    case W25Q_CMD_READ:
+                        status = W25Q_Read_DMA(hflash, item.address, item.buffer, item.size);
+                        if (status == W25Q_OK) {
+                            // Wait for DMA completion
+                            xSemaphoreTake(hflash->rx_semaphore, portMAX_DELAY);
+                            status = hflash->dma_error ? W25Q_ERROR : W25Q_OK;
+                        }
+                        break;
+                        
+                    case W25Q_CMD_WRITE_PAGE:
+                        status = W25Q_WritePage_DMA(hflash, item.address, item.buffer, item.size);
+                        if (status == W25Q_OK) {
+                            // Wait for DMA completion
+                            xSemaphoreTake(hflash->tx_semaphore, portMAX_DELAY);
+                            status = hflash->dma_error ? W25Q_ERROR : W25Q_OK;
+                            
+                            // Wait for flash to complete the write operation
+                            uint32_t timeout = W25Q_CalculateTimeout(hflash, W25Q_CMD_PAGE_PROGRAM, item.size);
+                            W25Q_WaitForReady(hflash, timeout);
+                        }
+                        break;
+                        
+                    case W25Q_CMD_ERASE_SECTOR:
+                        status = W25Q_EraseSector(hflash, item.address);
+                        break;
+                        
+                    case W25Q_CMD_READ_ID:
+                        status = W25Q_ReadJEDECID(hflash, 
+                                                 (uint8_t*)item.buffer, 
+                                                 (uint16_t*)(item.buffer + sizeof(uint8_t)));
+                        break;
+                        
+                    case W25Q_CMD_READ_STATUS:
+                        status = W25Q_ReadStatusRegister1(hflash, item.buffer);
+                        break;
+                        
+                    default:
+                        status = W25Q_PARAM_ERR;
+                        break;
+                }
+                
+                // Release the mutex
+                xSemaphoreGive(hflash->mutex);
+                
+                // Set the status if requested
+                if (item.status != NULL) {
+                    *item.status = status;
+                }
+                
+                // Signal completion to the caller
+                if (item.completion_semaphore != NULL) {
+                    xSemaphoreGive(item.completion_semaphore);
+                }
+            }
+        }
+    }
+}
+
+/**
+ * @brief Callback for TX DMA completion
+ * 
+ * @param hflash Pointer to the W25Q Flash memory handle
+ */
+static void W25Q_TxCpltCallback(W25Q_HandleTypeDef *hflash)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    
+    hflash->tx_complete = 1;
+    hflash->state = W25Q_STATE_READY;
+    
+    // Deassert CS pin
+    W25Q_CS_Disable(hflash);
+    
+    // Signal completion via semaphore if in RTOS mode
+    if (hflash->config.use_rtos && hflash->tx_semaphore != NULL) {
+        xSemaphoreGiveFromISR(hflash->tx_semaphore, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+    
+    // Call user callback if defined
+    if (hflash->config.TxCpltCallback != NULL) {
+        hflash->config.TxCpltCallback(hflash);
+    }
+}
+
+/**
+ * @brief Callback for RX DMA completion
+ * 
+ * @param hflash Pointer to the W25Q Flash memory handle
+ */
+static void W25Q_RxCpltCallback(W25Q_HandleTypeDef *hflash)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    
+    hflash->rx_complete = 1;
+    hflash->state = W25Q_STATE_READY;
+    
+    // Deassert CS pin
+    W25Q_CS_Disable(hflash);
+    
+    // Signal completion via semaphore if in RTOS mode
+    if (hflash->config.use_rtos && hflash->rx_semaphore != NULL) {
+        xSemaphoreGiveFromISR(hflash->rx_semaphore, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+    
+    // Call user callback if defined
+    if (hflash->config.RxCpltCallback != NULL) {
+        hflash->config.RxCpltCallback(hflash);
+    }
+}
+
+/**
+ * @brief Callback for TX/RX DMA completion
+ * 
+ * @param hflash Pointer to the W25Q Flash memory handle
+ */
+static void W25Q_TxRxCpltCallback(W25Q_HandleTypeDef *hflash)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    
+    hflash->tx_complete = 1;
+    hflash->rx_complete = 1;
+    hflash->state = W25Q_STATE_READY;
+    
+    // Deassert CS pin
+    W25Q_CS_Disable(hflash);
+    
+    // Signal completion via semaphore if in RTOS mode
+    if (hflash->config.use_rtos && hflash->txrx_semaphore != NULL) {
+        xSemaphoreGiveFromISR(hflash->txrx_semaphore, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+    
+    // Call user callback if defined
+    if (hflash->config.TxRxCpltCallback != NULL) {
+        hflash->config.TxRxCpltCallback(hflash);
+    }
+}
+
+/**
+ * @brief Callback for DMA error
+ * 
+ * @param hflash Pointer to the W25Q Flash memory handle
+ */
+static void W25Q_DMAErrorCallback(W25Q_HandleTypeDef *hflash)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    
+    hflash->dma_error = 1;
+    hflash->state = W25Q_STATE_READY;
+    
+    // Deassert CS pin
+    W25Q_CS_Disable(hflash);
+    
+    // Signal all semaphores to unblock any waiting tasks
+    if (hflash->config.use_rtos) {
+        if (hflash->tx_semaphore != NULL) {
+            xSemaphoreGiveFromISR(hflash->tx_semaphore, &xHigherPriorityTaskWoken);
+        }
+        if (hflash->rx_semaphore != NULL) {
+            xSemaphoreGiveFromISR(hflash->rx_semaphore, &xHigherPriorityTaskWoken);
+        }
+        if (hflash->txrx_semaphore != NULL) {
+            xSemaphoreGiveFromISR(hflash->txrx_semaphore, &xHigherPriorityTaskWoken);
+        }
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+}
+
 // --- Public Functions Implementation ---
 
 W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hflash, const W25Q_ConfigTypeDef *pFlashConfig)
@@ -303,13 +498,48 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hflash, const W25Q_ConfigTypeDe
     hflash->rx_complete = 0;
     hflash->dma_error = 0;
 
-    // Verify communication with the flash by reading JEDEC ID
+    // Initialize FreeRTOS synchronization primitives if RTOS is enabled
+    if (hflash->config.use_rtos) {
+        hflash->mutex = xSemaphoreCreateMutex();
+        hflash->tx_semaphore = xSemaphoreCreateBinary();
+        hflash->rx_semaphore = xSemaphoreCreateBinary();
+        hflash->txrx_semaphore = xSemaphoreCreateBinary();
+        
+        if (hflash->mutex == NULL || hflash->tx_semaphore == NULL || 
+            hflash->rx_semaphore == NULL || hflash->txrx_semaphore == NULL) {
+            // Clean up if any creation failed
+            W25Q_DeInit(hflash);
+            return W25Q_ERROR;
+        }
+        
+        // Create command queue
+        hflash->cmd_queue = xQueueCreate(10, sizeof(W25Q_QueueItem));
+        if (hflash->cmd_queue == NULL) {
+            W25Q_DeInit(hflash);
+            return W25Q_ERROR;
+        }
+    }
+
+    // IMPORTANT FIX: Use direct SPI communication for initial JEDEC ID read during initialization
+    // instead of using the RTOS version which requires the task to be running
     uint8_t mfg_id_read;
     uint16_t dev_id_read;
-    if (W25Q_ReadJEDECID(hflash, &mfg_id_read, &dev_id_read) != W25Q_OK)
+    uint8_t tx_buffer[4] = {W25Q_CMD_JEDEC_ID, W25Q_DATA_DUMMY, W25Q_DATA_DUMMY, W25Q_DATA_DUMMY};
+    uint8_t rx_buffer[4];
+
+    W25Q_CS_Enable(hflash);
+    W25Q_StatusTypeDef status = W25Q_SPI_TransmitReceive(hflash, tx_buffer, rx_buffer, 4);
+    W25Q_CS_Disable(hflash);
+
+    if (status != W25Q_OK)
     {
+        W25Q_DeInit(hflash);
         return W25Q_ERROR;
     }
+
+    // Parse JEDEC ID from response
+    mfg_id_read = rx_buffer[1];
+    dev_id_read = (uint16_t)(rx_buffer[2] << 8) | rx_buffer[3];
 
     // Store the discovered IDs in the handle
     hflash->mfg_id = mfg_id_read;
@@ -317,11 +547,18 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hflash, const W25Q_ConfigTypeDe
 
     // You might want to add checks here for expected Manufacturer/Device IDs
     // For Winbond, Manufacturer ID is typically 0xEF. Device ID varies (e.g., 0x4016 for W25Q32FV, 0x4018 for W25Q128FV)
-    if (hflash->mfg_id != 0xEF)
+    if (hflash->mfg_id != W25Q64BV_MFG_ID)
     {
         // Log an error or return a specific error code
+        W25Q_DeInit(hflash);
         return W25Q_ERROR;
     }
+    
+    // Start the FreeRTOS task if RTOS is enabled
+    if (hflash->config.use_rtos) {
+        W25Q_StartTask(hflash);
+    }
+    
     return W25Q_OK;
 }
 
@@ -331,6 +568,34 @@ W25Q_StatusTypeDef W25Q_DeInit(W25Q_HandleTypeDef *hflash)
     {
         return W25Q_PARAM_ERR;
     }
+    
+    // Stop the FreeRTOS task if it's running
+    if (hflash->config.use_rtos) {
+        W25Q_StopTask(hflash);
+        
+        // Delete FreeRTOS synchronization primitives
+        if (hflash->mutex != NULL) {
+            vSemaphoreDelete(hflash->mutex);
+            hflash->mutex = NULL;
+        }
+        if (hflash->tx_semaphore != NULL) {
+            vSemaphoreDelete(hflash->tx_semaphore);
+            hflash->tx_semaphore = NULL;
+        }
+        if (hflash->rx_semaphore != NULL) {
+            vSemaphoreDelete(hflash->rx_semaphore);
+            hflash->rx_semaphore = NULL;
+        }
+        if (hflash->txrx_semaphore != NULL) {
+            vSemaphoreDelete(hflash->txrx_semaphore);
+            hflash->txrx_semaphore = NULL;
+        }
+        if (hflash->cmd_queue != NULL) {
+            vQueueDelete(hflash->cmd_queue);
+            hflash->cmd_queue = NULL;
+        }
+    }
+    
     W25Q_CS_Disable(hflash); // Ensure CS is inactive
     
     g_w25q_handle = NULL;
@@ -347,6 +612,11 @@ W25Q_StatusTypeDef W25Q_ReadJEDECID(W25Q_HandleTypeDef *hflash, uint8_t *pManufa
     if (hflash == NULL || pManufacturerID == NULL || pDeviceID == NULL)
     {
         return W25Q_PARAM_ERR;
+    }
+    
+    // If RTOS is enabled, task is created, and we're not in an ISR, use the thread-safe version
+    if (hflash->config.use_rtos && hflash->task_handle != NULL && !xPortIsInsideInterrupt()) {
+        return W25Q_ReadJEDECID_RTOS(hflash, pManufacturerID, pDeviceID);
     }
 
     uint8_t tx_buffer[4] = {W25Q_CMD_JEDEC_ID, W25Q_DATA_DUMMY, W25Q_DATA_DUMMY, W25Q_DATA_DUMMY}; // Cmd + 3 dummy bytes
@@ -459,6 +729,11 @@ W25Q_StatusTypeDef W25Q_Read(W25Q_HandleTypeDef *hflash, uint32_t Address, uint8
     {
         return W25Q_PARAM_ERR;
     }
+    
+    // If RTOS is enabled and we're not in an ISR, use the thread-safe version
+    if (hflash->config.use_rtos && !xPortIsInsideInterrupt()) {
+        return W25Q_Read_RTOS(hflash, Address, pBuffer, Size);
+    }
 
     uint8_t tx_header[5];              // Command + 3-byte address + 1 dummy byte for Fast Read
     tx_header[0] = W25Q_CMD_FAST_READ; // Using Fast Read for better performance
@@ -479,9 +754,14 @@ W25Q_StatusTypeDef W25Q_Read(W25Q_HandleTypeDef *hflash, uint32_t Address, uint8
 
 W25Q_StatusTypeDef W25Q_WritePage(W25Q_HandleTypeDef *hflash, uint32_t Address, const uint8_t *pBuffer, uint32_t Size)
 {
-    if (hflash == NULL || pBuffer == NULL || Size == 0 || Size > hflash->config.page_size || (Address % hflash->config.page_size) != 0)
+    if (hflash == NULL || pBuffer == NULL || Size == 0 || Size > hflash->config.page_size /*|| (Address % hflash->config.page_size) != 0*/)
     {
         return W25Q_PARAM_ERR;
+    }
+    
+    // If RTOS is enabled and we're not in an ISR, use the thread-safe version
+    if (hflash->config.use_rtos && !xPortIsInsideInterrupt()) {
+        return W25Q_WritePage_RTOS(hflash, Address, pBuffer, Size);
     }
 
     W25Q_StatusTypeDef status;
@@ -524,6 +804,11 @@ W25Q_StatusTypeDef W25Q_EraseSector(W25Q_HandleTypeDef *hflash, uint32_t SectorA
     {
         return W25Q_PARAM_ERR;
     }
+    
+    // If RTOS is enabled and we're not in an ISR, use the thread-safe version
+    if (hflash->config.use_rtos && !xPortIsInsideInterrupt()) {
+        return W25Q_EraseSector_RTOS(hflash, SectorAddress);
+    }
 
     W25Q_StatusTypeDef status;
     uint32_t timeout_ms = W25Q_CalculateTimeout(hflash, W25Q_CMD_SECTOR_ERASE_4KB, 0); // 0 for data_size for erase, only one sector!
@@ -559,17 +844,7 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
     // We know there's only one flash chip, so just use the global handle
     if (g_w25q_handle != NULL && g_w25q_handle->config.spi_handle == hspi)
     {
-        g_w25q_handle->tx_complete = 1;
-        g_w25q_handle->state = W25Q_STATE_READY;
-        
-        // Deassert CS pin
-        W25Q_CS_Disable(g_w25q_handle);
-        
-        // Call user callback if defined
-        if (g_w25q_handle->config.TxCpltCallback != NULL)
-        {
-            g_w25q_handle->config.TxCpltCallback(g_w25q_handle);
-        }
+        W25Q_TxCpltCallback(g_w25q_handle);
     }
 }
 
@@ -577,17 +852,15 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
 {
     if (g_w25q_handle != NULL && g_w25q_handle->config.spi_handle == hspi)
     {
-        g_w25q_handle->rx_complete = 1;
-        g_w25q_handle->state = W25Q_STATE_READY;
-        
-        // Deassert CS pin
-        W25Q_CS_Disable(g_w25q_handle);
-        
-        // Call user callback if defined
-        if (g_w25q_handle->config.RxCpltCallback != NULL)
-        {
-            g_w25q_handle->config.RxCpltCallback(g_w25q_handle);
-        }
+        W25Q_RxCpltCallback(g_w25q_handle);
+    }
+}
+
+void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+    if (g_w25q_handle != NULL && g_w25q_handle->config.spi_handle == hspi)
+    {
+        W25Q_TxRxCpltCallback(g_w25q_handle);
     }
 }
 
@@ -595,17 +868,7 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
 {
     if (g_w25q_handle != NULL && g_w25q_handle->config.spi_handle == hspi)
     {
-        g_w25q_handle->dma_error = 1;
-        g_w25q_handle->state = W25Q_STATE_READY;
-        
-        // Deassert CS pin
-        W25Q_CS_Disable(g_w25q_handle);
-        
-        // // Call error callback if defined
-        // if (g_w25q_handle->config.ErrorCallback != NULL)
-        // {
-        //     g_w25q_handle->config.ErrorCallback(g_w25q_handle);
-        // }
+        W25Q_DMAErrorCallback(g_w25q_handle);
     }
 }
 
@@ -722,4 +985,219 @@ W25Q_StatusTypeDef W25Q_WritePage_DMA(W25Q_HandleTypeDef *hflash, uint32_t Addre
     }
     
     return W25Q_OK;
+}
+
+// FreeRTOS specific functions
+W25Q_StatusTypeDef W25Q_StartTask(W25Q_HandleTypeDef *hflash)
+{
+    if (hflash == NULL || !hflash->config.use_rtos) {
+        return W25Q_PARAM_ERR;
+    }
+    
+    // Create the task if it doesn't exist
+    if (hflash->task_handle == NULL) {
+        BaseType_t result = xTaskCreate(
+            W25Q_Task,                  // Task function
+            "W25Q_Task",                // Task name
+            configMINIMAL_STACK_SIZE*2, // Stack size (adjust as needed)
+            (void*)hflash,              // Parameter passed to the task
+            tskIDLE_PRIORITY + 1,       // Priority (adjust as needed)
+            &hflash->task_handle        // Task handle
+        );
+        
+        if (result != pdPASS) {
+            return W25Q_ERROR;
+        }
+    }
+    
+    return W25Q_OK;
+}
+
+W25Q_StatusTypeDef W25Q_StopTask(W25Q_HandleTypeDef *hflash)
+{
+    if (hflash == NULL || !hflash->config.use_rtos) {
+        return W25Q_PARAM_ERR;
+    }
+    
+    // Delete the task if it exists
+    if (hflash->task_handle != NULL) {
+        vTaskDelete(hflash->task_handle);
+        hflash->task_handle = NULL;
+    }
+    
+    return W25Q_OK;
+}
+
+W25Q_StatusTypeDef W25Q_Read_RTOS(W25Q_HandleTypeDef *hflash, uint32_t Address, uint8_t *pBuffer, uint32_t Size)
+{
+    if (hflash == NULL || pBuffer == NULL || Size == 0 || !hflash->config.use_rtos) {
+        return W25Q_PARAM_ERR;
+    }
+    
+    W25Q_QueueItem item;
+    W25Q_StatusTypeDef status = W25Q_OK;
+    SemaphoreHandle_t completion_semaphore;
+    
+    // Create a semaphore for this operation
+    completion_semaphore = xSemaphoreCreateBinary();
+    if (completion_semaphore == NULL) {
+        return W25Q_ERROR;
+    }
+    
+    // Prepare the command
+    item.cmd_type = W25Q_CMD_READ;
+    item.address = Address;
+    item.buffer = pBuffer;
+    item.size = Size;
+    item.status = &status;
+    item.completion_semaphore = completion_semaphore;
+    
+    // Send the command to the queue
+    if (xQueueSend(hflash->cmd_queue, &item, pdMS_TO_TICKS(100)) != pdTRUE) {
+        vSemaphoreDelete(completion_semaphore);
+        return W25Q_BUSY;
+    }
+    
+    // Wait for the operation to complete
+    if (xSemaphoreTake(completion_semaphore, pdMS_TO_TICKS(W25Q_MAX_READY_TIMEOUT_MS)) != pdTRUE) {
+        status = W25Q_TIMEOUT;
+    }
+    
+    // Clean up
+    vSemaphoreDelete(completion_semaphore);
+    
+    return status;
+}
+
+W25Q_StatusTypeDef W25Q_WritePage_RTOS(W25Q_HandleTypeDef *hflash, uint32_t Address, const uint8_t *pBuffer, uint32_t Size)
+{
+    if (hflash == NULL || pBuffer == NULL || Size == 0 || Size > hflash->config.page_size || 
+        (Address % hflash->config.page_size) != 0 || !hflash->config.use_rtos) {
+        return W25Q_PARAM_ERR;
+    }
+    
+    W25Q_QueueItem item;
+    W25Q_StatusTypeDef status = W25Q_OK;
+    SemaphoreHandle_t completion_semaphore;
+    
+    // Create a semaphore for this operation
+    completion_semaphore = xSemaphoreCreateBinary();
+    if (completion_semaphore == NULL) {
+        return W25Q_ERROR;
+    }
+    
+    // Prepare the command
+    item.cmd_type = W25Q_CMD_WRITE_PAGE;
+    item.address = Address;
+    item.buffer = (uint8_t*)pBuffer;  // Cast away const for the queue item
+    item.size = Size;
+    item.status = &status;
+    item.completion_semaphore = completion_semaphore;
+    
+    // Send the command to the queue
+    if (xQueueSend(hflash->cmd_queue, &item, pdMS_TO_TICKS(100)) != pdTRUE) {
+        vSemaphoreDelete(completion_semaphore);
+        return W25Q_BUSY;
+    }
+    
+    // Wait for the operation to complete with appropriate timeout
+    uint32_t timeout = W25Q_CalculateTimeout(hflash, W25Q_CMD_PAGE_PROGRAM, Size);
+    if (xSemaphoreTake(completion_semaphore, pdMS_TO_TICKS(timeout + 100)) != pdTRUE) {
+        status = W25Q_TIMEOUT;
+    }
+    
+    // Clean up
+    vSemaphoreDelete(completion_semaphore);
+    
+    return status;
+}
+
+W25Q_StatusTypeDef W25Q_EraseSector_RTOS(W25Q_HandleTypeDef *hflash, uint32_t SectorAddress)
+{
+    if (hflash == NULL || (SectorAddress % hflash->config.sector_size) != 0 || !hflash->config.use_rtos) {
+        return W25Q_PARAM_ERR;
+    }
+    
+    W25Q_QueueItem item;
+    W25Q_StatusTypeDef status = W25Q_OK;
+    SemaphoreHandle_t completion_semaphore;
+    
+    // Create a semaphore for this operation
+    completion_semaphore = xSemaphoreCreateBinary();
+    if (completion_semaphore == NULL) {
+        return W25Q_ERROR;
+    }
+    
+    // Prepare the command
+    item.cmd_type = W25Q_CMD_ERASE_SECTOR;
+    item.address = SectorAddress;
+    item.buffer = NULL;
+    item.size = 0;
+    item.status = &status;
+    item.completion_semaphore = completion_semaphore;
+    
+    // Send the command to the queue
+    if (xQueueSend(hflash->cmd_queue, &item, pdMS_TO_TICKS(100)) != pdTRUE) {
+        vSemaphoreDelete(completion_semaphore);
+        return W25Q_BUSY;
+    }
+    
+    // Wait for the operation to complete with appropriate timeout
+    // uint32_t timeout = W25Q_CalculateTimeout(hflash, W25Q_CMD_SECTOR_ERASE_4KB, 0);
+    if (xSemaphoreTake(completion_semaphore, pdMS_TO_TICKS(10000)) != pdTRUE) {
+        status = W25Q_TIMEOUT;
+    }
+    
+    // Clean up
+    vSemaphoreDelete(completion_semaphore);
+    
+    return status;
+}
+
+W25Q_StatusTypeDef W25Q_ReadJEDECID_RTOS(W25Q_HandleTypeDef *hflash, uint8_t *pManufacturerID, uint16_t *pDeviceID)
+{
+    if (hflash == NULL || pManufacturerID == NULL || pDeviceID == NULL || !hflash->config.use_rtos) {
+        return W25Q_PARAM_ERR;
+    }
+    
+    W25Q_QueueItem item;
+    W25Q_StatusTypeDef status = W25Q_OK;
+    SemaphoreHandle_t completion_semaphore;
+    uint8_t buffer[3]; // Temporary buffer for ID data
+    
+    // Create a semaphore for this operation
+    completion_semaphore = xSemaphoreCreateBinary();
+    if (completion_semaphore == NULL) {
+        return W25Q_ERROR;
+    }
+    
+    // Prepare the command
+    item.cmd_type = W25Q_CMD_READ_ID;
+    item.address = 0; // Not used for this command
+    item.buffer = buffer;
+    item.size = 0; // Not used for this command
+    item.status = &status;
+    item.completion_semaphore = completion_semaphore;
+    
+    // Send the command to the queue
+    if (xQueueSend(hflash->cmd_queue, &item, pdMS_TO_TICKS(100)) != pdTRUE) {
+        vSemaphoreDelete(completion_semaphore);
+        return W25Q_BUSY;
+    }
+    
+    // Wait for the operation to complete
+    if (xSemaphoreTake(completion_semaphore, pdMS_TO_TICKS(100)) != pdTRUE) {
+        status = W25Q_TIMEOUT;
+    } else {
+        // Copy the results if the operation was successful
+        if (status == W25Q_OK) {
+            *pManufacturerID = buffer[0];
+            *pDeviceID = (uint16_t)(buffer[1] << 8) | buffer[2];
+        }
+    }
+    
+    // Clean up
+    vSemaphoreDelete(completion_semaphore);
+    
+    return status;
 }

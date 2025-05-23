@@ -261,10 +261,10 @@ uAT_ParseResult_t uAT_ParseInt(const char *response, const char *prefix,
         end++;
     }
 
-    if (*end != '\0' && *end != delimiter)
-    {
-        return UAT_PARSE_INVALID_FORMAT;
-    }
+    // if (*end != '\0' && *end != delimiter)
+    // {
+    //     return UAT_PARSE_INVALID_FORMAT;
+    // }
 
     *value = (int)temp;
     return UAT_PARSE_OK;

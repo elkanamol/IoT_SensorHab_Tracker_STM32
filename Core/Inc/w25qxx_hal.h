@@ -6,6 +6,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// Add FreeRTOS includes
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include "semphr.h"
+
 // Define common HAL status codes for the W25QXX driver
 typedef enum
 {
@@ -112,6 +118,9 @@ typedef struct
 
     // Optional: SPI/QSPI mode (future expansion)
     uint8_t spi_mode; // 1: SPI, 4: QSPI, 8: OctoSPI
+    
+    // FreeRTOS support flag
+    uint8_t use_rtos;
 } W25Q_ConfigTypeDef;
 
 /**
@@ -124,12 +133,41 @@ typedef struct W25Q_HandleTypeDef_s
     uint8_t mfg_id;
     uint16_t dev_id;
     
-    // New state tracking for DMA operations
+    // State tracking for DMA operations
     volatile uint8_t state;     // Current state (READY, BUSY_TX, BUSY_RX)
     volatile uint8_t dma_error; // DMA error flag
     volatile uint8_t tx_complete;
     volatile uint8_t rx_complete;
+    
+    // FreeRTOS synchronization primitives
+    SemaphoreHandle_t mutex;           // Mutex for thread-safe access
+    SemaphoreHandle_t tx_semaphore;    // Binary semaphore for TX completion
+    SemaphoreHandle_t rx_semaphore;    // Binary semaphore for RX completion
+    SemaphoreHandle_t txrx_semaphore;  // Binary semaphore for TX/RX completion
+    
+    // FreeRTOS task and queue handles
+    TaskHandle_t task_handle;
+    QueueHandle_t cmd_queue;
 } W25Q_HandleTypeDef;
+
+// Command types for flash operations (for FreeRTOS queue)
+typedef enum {
+    W25Q_CMD_READ,
+    W25Q_CMD_WRITE_PAGE,
+    W25Q_CMD_ERASE_SECTOR,
+    W25Q_CMD_READ_ID,
+    W25Q_CMD_READ_STATUS
+} W25Q_CommandType;
+
+// Command structure for flash operations (for FreeRTOS queue)
+typedef struct {
+    W25Q_CommandType cmd_type;
+    uint32_t address;
+    uint8_t *buffer;
+    uint32_t size;
+    W25Q_StatusTypeDef *status;
+    SemaphoreHandle_t completion_semaphore; // Caller's semaphore to signal completion
+} W25Q_QueueItem;
 
 // --- Public Function Prototypes ---
 
@@ -219,4 +257,57 @@ W25Q_StatusTypeDef W25Q_EraseSector(W25Q_HandleTypeDef *hflash, uint32_t SectorA
 W25Q_StatusTypeDef W25Q_Read_DMA(W25Q_HandleTypeDef *hflash, uint32_t Address, uint8_t *pBuffer, uint32_t Size);
 W25Q_StatusTypeDef W25Q_WritePage_DMA(W25Q_HandleTypeDef *hflash, uint32_t Address, const uint8_t *pBuffer, uint32_t Size);
 W25Q_StatusTypeDef W25Q_WaitForDMATransferComplete(W25Q_HandleTypeDef *hflash, uint32_t Timeout);
+
+// FreeRTOS specific functions
+/**
+ * @brief Starts the W25QXX flash task for handling operations in FreeRTOS environment
+ * @param hflash Pointer to the W25Q_HandleTypeDef structure.
+ * @retval W25Q_StatusTypeDef Status of the operation.
+ */
+W25Q_StatusTypeDef W25Q_StartTask(W25Q_HandleTypeDef *hflash);
+
+/**
+ * @brief Stops the W25QXX flash task
+ * @param hflash Pointer to the W25Q_HandleTypeDef structure.
+ * @retval W25Q_StatusTypeDef Status of the operation.
+ */
+W25Q_StatusTypeDef W25Q_StopTask(W25Q_HandleTypeDef *hflash);
+
+/**
+ * @brief Thread-safe read operation using FreeRTOS
+ * @param hflash Pointer to the W25Q_HandleTypeDef structure.
+ * @param Address The starting address to read from.
+ * @param pBuffer Pointer to the buffer where read data will be stored.
+ * @param Size Number of bytes to read.
+ * @retval W25Q_StatusTypeDef Status of the operation.
+ */
+W25Q_StatusTypeDef W25Q_Read_RTOS(W25Q_HandleTypeDef *hflash, uint32_t Address, uint8_t *pBuffer, uint32_t Size);
+
+/**
+ * @brief Thread-safe page write operation using FreeRTOS
+ * @param hflash Pointer to the W25Q_HandleTypeDef structure.
+ * @param Address The starting address to write to (must be page aligned).
+ * @param pBuffer Pointer to the data to be written.
+ * @param Size Number of bytes to write (max hflash->config.page_size).
+ * @retval W25Q_StatusTypeDef Status of the operation.
+ */
+W25Q_StatusTypeDef W25Q_WritePage_RTOS(W25Q_HandleTypeDef *hflash, uint32_t Address, const uint8_t *pBuffer, uint32_t Size);
+
+/**
+ * @brief Thread-safe sector erase operation using FreeRTOS
+ * @param hflash Pointer to the W25Q_HandleTypeDef structure.
+ * @param SectorAddress The starting address of the sector to erase (must be sector aligned).
+ * @retval W25Q_StatusTypeDef Status of the operation.
+ */
+W25Q_StatusTypeDef W25Q_EraseSector_RTOS(W25Q_HandleTypeDef *hflash, uint32_t SectorAddress);
+
+/**
+ * @brief Thread-safe JEDEC ID read operation using FreeRTOS
+ * @param hflash Pointer to the W25Q_HandleTypeDef structure.
+ * @param pManufacturerID Pointer to store the Manufacturer ID.
+ * @param pDeviceID Pointer to store the Device ID.
+ * @retval W25Q_StatusTypeDef Status of the operation.
+ */
+W25Q_StatusTypeDef W25Q_ReadJEDECID_RTOS(W25Q_HandleTypeDef *hflash, uint8_t *pManufacturerID, uint16_t *pDeviceID);
+
 #endif // W25QXX_HAL_H

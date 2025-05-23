@@ -53,6 +53,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/rc76xx_mqtt.c
     Core/Src/bme280_porting.c
     Core/Src/bme280.c
+    Core/Src/w25qxx_hal.c
 )
 
 # Add include paths
