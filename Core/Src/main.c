@@ -111,7 +111,7 @@ static W25Q_StatusTypeDef W25Q_Flash_Init(void)
   flashConfig.spi_handle = &hspi1;
   flashConfig.cs_port = SPI1_CS_GPIO_Port;
   flashConfig.cs_pin = SPI1_CS_Pin;
-
+#ifdef W25QXX_USE_DMA
   // DMA configuration (if used)
   flashConfig.use_dma = 1; // Set to 1 to use DMA
   flashConfig.hdmatx = hspi1.hdmatx;
@@ -121,7 +121,7 @@ static W25Q_StatusTypeDef W25Q_Flash_Init(void)
   flashConfig.TxCpltCallback = HAL_SPI_TxCpltCallback;
   flashConfig.RxCpltCallback = HAL_SPI_RxCpltCallback;
   flashConfig.TxRxCpltCallback = HAL_SPI_TxRxCpltCallback;
-
+#endif
   // Flash parameters (can use defaults)
   flashConfig.page_size = W25Q_DEFAULT_PAGE_SIZE;
   flashConfig.sector_size = W25Q_DEFAULT_SECTOR_SIZE;
@@ -132,9 +132,10 @@ static W25Q_StatusTypeDef W25Q_Flash_Init(void)
   // SPI mode
   flashConfig.spi_mode = 1; // 1 for standard SPI
 
+#ifdef W25QXX_USE_RTOS
   // IMPORTANT FIX: Initialize without RTOS first, then enable RTOS later
   flashConfig.use_rtos = 0; // First initialize without RTOS
-
+#endif
   // Initialize the flash without RTOS support
   status = W25Q_Init(&hflash, &flashConfig);
   if (status != W25Q_OK)
@@ -142,42 +143,13 @@ static W25Q_StatusTypeDef W25Q_Flash_Init(void)
     printf("W25Q Flash initialization failed with error: %d\r\n", status);
     return status;
   }
-
-  // // Read and print the JEDEC ID
-  // status = W25Q_ReadJEDECID(&hflash, &mfgID, &devID);
-  // if (status == W25Q_OK)
-  // {
-  //   printf("W25Q Flash detected: Manufacturer ID: 0x%02X, Device ID: 0x%04X\r\n", mfgID, devID);
-  // }
-  // else
-  // {
-  //   printf("Failed to read W25Q Flash JEDEC ID: %d\r\n", status);
-  //   return status;
-  // }
-
-  // // Now enable RTOS support and create the task
-  // hflash.config.use_rtos = 1;
-
-  // // Create RTOS synchronization primitives
-  // hflash.mutex = xSemaphoreCreateMutex();
-  // hflash.tx_semaphore = xSemaphoreCreateBinary();
-  // hflash.rx_semaphore = xSemaphoreCreateBinary();
-  // hflash.txrx_semaphore = xSemaphoreCreateBinary();
-  // hflash.cmd_queue = xQueueCreate(10, sizeof(W25Q_QueueItem));
-
-  // if (hflash.mutex == NULL || hflash.tx_semaphore == NULL ||
-  //     hflash.rx_semaphore == NULL || hflash.txrx_semaphore == NULL ||
-  //     hflash.cmd_queue == NULL) {
-  //     printf("Failed to create RTOS primitives\r\n");
-  //     return W25Q_ERROR;
-  // }
-
-  // // Start the W25Q task
-  // status = W25Q_StartTask(&hflash);
-  // if (status != W25Q_OK) {
-  //     printf("Failed to start W25Q task\r\n");
-  //     return status;
-  // }
+  status = W25Q_ReadJEDECID(&hflash, &mfgID, &devID);
+  if (status != W25Q_OK)
+  {
+    printf("Failed to read W25Q Flash JEDEC ID: %d\r\n", status);
+    return status;
+  }
+  printf("W25Q Flash detected: Manufacturer ID: 0x%02X, Device ID: 0x%04X\r\n", mfgID, devID);
 
   return W25Q_OK;
 }

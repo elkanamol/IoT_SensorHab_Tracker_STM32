@@ -1,7 +1,11 @@
 #include "w25qxx_hal.h"
 #include <string.h> // For memcpy
 
-// --- Private Functions Prototypes ---
+/* --- Global Variables --- */
+static W25Q_HandleTypeDef *g_w25q_handle = NULL;
+
+/* --- Private Functions Prototypes --- */
+/* Core/Base private functions */
 static void W25Q_CS_Enable(W25Q_HandleTypeDef *hflash);
 static void W25Q_CS_Disable(W25Q_HandleTypeDef *hflash);
 static W25Q_StatusTypeDef W25Q_SPI_Transmit(W25Q_HandleTypeDef *hflash, uint8_t *pData, uint16_t Size);
@@ -12,17 +16,21 @@ static W25Q_StatusTypeDef W25Q_WaitForReady(W25Q_HandleTypeDef *hflash, uint32_t
 static W25Q_StatusTypeDef W25Q_SendCmdAddress(W25Q_HandleTypeDef *hflash, uint8_t cmd, uint32_t address);
 static W25Q_StatusTypeDef W25Q_SendCmdAddressData(W25Q_HandleTypeDef *hflash, uint8_t cmd, uint32_t address, const uint8_t *pData, uint32_t size);
 
-// FreeRTOS specific private functions
-static void W25Q_Task(void *argument);
+#ifdef W25QXX_USE_DMA
+/* DMA-specific private functions */
+static W25Q_StatusTypeDef W25Q_SPI_Transmit_DMA(W25Q_HandleTypeDef *hflash, uint8_t *pData, uint16_t Size);
 static void W25Q_TxCpltCallback(W25Q_HandleTypeDef *hflash);
 static void W25Q_RxCpltCallback(W25Q_HandleTypeDef *hflash);
 static void W25Q_TxRxCpltCallback(W25Q_HandleTypeDef *hflash);
 static void W25Q_DMAErrorCallback(W25Q_HandleTypeDef *hflash);
+#endif
 
-// Single global pointer to the W25Q handle
-static W25Q_HandleTypeDef* g_w25q_handle = NULL;
-
+#ifdef W25QXX_USE_RTOS
+static void W25Q_Task(void *argument);
+#endif
 // --- Private Functions Implementation ---
+
+/* === CORE/BASE FUNCTIONS IMPLEMENTATION === */
 
 /**
  * @brief Enables the Chip Select (CS) pin for the W25Q Flash memory device
@@ -47,7 +55,7 @@ static void W25Q_CS_Disable(W25Q_HandleTypeDef *hflash)
 /**
  * @brief Transmits data over SPI for the W25Q Flash memory device
  * @param hflash Pointer to the W25Q Flash memory handle
- * @param pData Pointer to the data buffer to be transmitted
+ * @param pData Pointer to the buffer containing data to transmit
  * @param Size Number of bytes to transmit
  * @return W25Q_StatusTypeDef Status of the SPI transmission operation
  *         - W25Q_OK: Transmission successful
@@ -56,7 +64,8 @@ static void W25Q_CS_Disable(W25Q_HandleTypeDef *hflash)
  */
 static W25Q_StatusTypeDef W25Q_SPI_Transmit(W25Q_HandleTypeDef *hflash, uint8_t *pData, uint16_t Size)
 {
-    if (hflash == NULL || pData == NULL || Size == 0 )
+    // Base implementation
+    if (hflash == NULL || pData == NULL || Size == 0)
     {
         return W25Q_PARAM_ERR;
     }
@@ -67,25 +76,6 @@ static W25Q_StatusTypeDef W25Q_SPI_Transmit(W25Q_HandleTypeDef *hflash, uint8_t 
     return W25Q_ERROR;
 }
 
-static W25Q_StatusTypeDef W25Q_SPI_Transmit_DMA(W25Q_HandleTypeDef *hflash, uint8_t *pData, uint16_t Size)
-{
-    if (hflash == NULL || pData == NULL || Size == 0 || hflash->config.hdmatx == NULL)
-    {
-        return W25Q_PARAM_ERR;
-    }
-    
-    hflash->state = W25Q_STATE_BUSY_TX;
-    hflash->tx_complete = 0;
-    hflash->dma_error = 0;
-    
-    if (HAL_SPI_Transmit_DMA(hflash->config.spi_handle, pData, Size) == HAL_OK)
-    {
-        return W25Q_OK;
-    }
-    
-    hflash->state = W25Q_STATE_READY;
-    return W25Q_ERROR;
-}
 /**
  * @brief Receives data over SPI for the W25Q Flash memory device
  * @param hflash Pointer to the W25Q Flash memory handle
@@ -275,198 +265,26 @@ static W25Q_StatusTypeDef W25Q_SendCmdAddressData(W25Q_HandleTypeDef *hflash, ui
     return status;
 }
 
-/**
- * @brief FreeRTOS task function for handling flash operations
- * 
- * @param argument Task argument (not used)
- */
-static void W25Q_Task(void *argument)
-{
-    W25Q_HandleTypeDef *hflash = (W25Q_HandleTypeDef *)argument;
-    W25Q_QueueItem item;
-    W25Q_StatusTypeDef status;
-    
-    for (;;) {
-        // Wait for a command from the queue
-        if (xQueueReceive(hflash->cmd_queue, &item, portMAX_DELAY) == pdTRUE) {
-            // Take the mutex to ensure exclusive access to the flash
-            if (xSemaphoreTake(hflash->mutex, portMAX_DELAY) == pdTRUE) {
-                // Process the command
-                switch (item.cmd_type) {
-                    case W25Q_CMD_READ:
-                        status = W25Q_Read_DMA(hflash, item.address, item.buffer, item.size);
-                        if (status == W25Q_OK) {
-                            // Wait for DMA completion
-                            xSemaphoreTake(hflash->rx_semaphore, portMAX_DELAY);
-                            status = hflash->dma_error ? W25Q_ERROR : W25Q_OK;
-                        }
-                        break;
-                        
-                    case W25Q_CMD_WRITE_PAGE:
-                        status = W25Q_WritePage_DMA(hflash, item.address, item.buffer, item.size);
-                        if (status == W25Q_OK) {
-                            // Wait for DMA completion
-                            xSemaphoreTake(hflash->tx_semaphore, portMAX_DELAY);
-                            status = hflash->dma_error ? W25Q_ERROR : W25Q_OK;
-                            
-                            // Wait for flash to complete the write operation
-                            uint32_t timeout = W25Q_CalculateTimeout(hflash, W25Q_CMD_PAGE_PROGRAM, item.size);
-                            W25Q_WaitForReady(hflash, timeout);
-                        }
-                        break;
-                        
-                    case W25Q_CMD_ERASE_SECTOR:
-                        status = W25Q_EraseSector(hflash, item.address);
-                        break;
-                        
-                    case W25Q_CMD_READ_ID:
-                        status = W25Q_ReadJEDECID(hflash, 
-                                                 (uint8_t*)item.buffer, 
-                                                 (uint16_t*)(item.buffer + sizeof(uint8_t)));
-                        break;
-                        
-                    case W25Q_CMD_READ_STATUS:
-                        status = W25Q_ReadStatusRegister1(hflash, item.buffer);
-                        break;
-                        
-                    default:
-                        status = W25Q_PARAM_ERR;
-                        break;
-                }
-                
-                // Release the mutex
-                xSemaphoreGive(hflash->mutex);
-                
-                // Set the status if requested
-                if (item.status != NULL) {
-                    *item.status = status;
-                }
-                
-                // Signal completion to the caller
-                if (item.completion_semaphore != NULL) {
-                    xSemaphoreGive(item.completion_semaphore);
-                }
-            }
-        }
-    }
-}
+/* === PUBLIC CORE/BASE API IMPLEMENTATION === */
 
 /**
- * @brief Callback for TX DMA completion
- * 
- * @param hflash Pointer to the W25Q Flash memory handle
+ * @brief Initialize a W25Q Flash memory handle with the provided configuration
+ *
+ * This function sets up a W25Q Flash memory handle by validating input parameters,
+ * copying configuration, setting default chip parameters, and initializing
+ * optional DMA and RTOS-specific resources.
+ *
+ * @param hflash Pointer to the W25Q Flash memory handle to be initialized
+ * @param pFlashConfig Pointer to the configuration parameters for the Flash memory
+ *
+ * @return W25Q_StatusTypeDef Status of the initialization process
+ *         - W25Q_OK: Successful initialization
+ *         - W25Q_PARAM_ERR: Invalid input parameters
+ *         - W25Q_ERROR: Resource allocation failure
  */
-static void W25Q_TxCpltCallback(W25Q_HandleTypeDef *hflash)
-{
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    
-    hflash->tx_complete = 1;
-    hflash->state = W25Q_STATE_READY;
-    
-    // Deassert CS pin
-    W25Q_CS_Disable(hflash);
-    
-    // Signal completion via semaphore if in RTOS mode
-    if (hflash->config.use_rtos && hflash->tx_semaphore != NULL) {
-        xSemaphoreGiveFromISR(hflash->tx_semaphore, &xHigherPriorityTaskWoken);
-        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-    }
-    
-    // Call user callback if defined
-    if (hflash->config.TxCpltCallback != NULL) {
-        hflash->config.TxCpltCallback(hflash);
-    }
-}
-
-/**
- * @brief Callback for RX DMA completion
- * 
- * @param hflash Pointer to the W25Q Flash memory handle
- */
-static void W25Q_RxCpltCallback(W25Q_HandleTypeDef *hflash)
-{
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    
-    hflash->rx_complete = 1;
-    hflash->state = W25Q_STATE_READY;
-    
-    // Deassert CS pin
-    W25Q_CS_Disable(hflash);
-    
-    // Signal completion via semaphore if in RTOS mode
-    if (hflash->config.use_rtos && hflash->rx_semaphore != NULL) {
-        xSemaphoreGiveFromISR(hflash->rx_semaphore, &xHigherPriorityTaskWoken);
-        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-    }
-    
-    // Call user callback if defined
-    if (hflash->config.RxCpltCallback != NULL) {
-        hflash->config.RxCpltCallback(hflash);
-    }
-}
-
-/**
- * @brief Callback for TX/RX DMA completion
- * 
- * @param hflash Pointer to the W25Q Flash memory handle
- */
-static void W25Q_TxRxCpltCallback(W25Q_HandleTypeDef *hflash)
-{
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    
-    hflash->tx_complete = 1;
-    hflash->rx_complete = 1;
-    hflash->state = W25Q_STATE_READY;
-    
-    // Deassert CS pin
-    W25Q_CS_Disable(hflash);
-    
-    // Signal completion via semaphore if in RTOS mode
-    if (hflash->config.use_rtos && hflash->txrx_semaphore != NULL) {
-        xSemaphoreGiveFromISR(hflash->txrx_semaphore, &xHigherPriorityTaskWoken);
-        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-    }
-    
-    // Call user callback if defined
-    if (hflash->config.TxRxCpltCallback != NULL) {
-        hflash->config.TxRxCpltCallback(hflash);
-    }
-}
-
-/**
- * @brief Callback for DMA error
- * 
- * @param hflash Pointer to the W25Q Flash memory handle
- */
-static void W25Q_DMAErrorCallback(W25Q_HandleTypeDef *hflash)
-{
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    
-    hflash->dma_error = 1;
-    hflash->state = W25Q_STATE_READY;
-    
-    // Deassert CS pin
-    W25Q_CS_Disable(hflash);
-    
-    // Signal all semaphores to unblock any waiting tasks
-    if (hflash->config.use_rtos) {
-        if (hflash->tx_semaphore != NULL) {
-            xSemaphoreGiveFromISR(hflash->tx_semaphore, &xHigherPriorityTaskWoken);
-        }
-        if (hflash->rx_semaphore != NULL) {
-            xSemaphoreGiveFromISR(hflash->rx_semaphore, &xHigherPriorityTaskWoken);
-        }
-        if (hflash->txrx_semaphore != NULL) {
-            xSemaphoreGiveFromISR(hflash->txrx_semaphore, &xHigherPriorityTaskWoken);
-        }
-        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-    }
-}
-
-// --- Public Functions Implementation ---
-
 W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hflash, const W25Q_ConfigTypeDef *pFlashConfig)
 {
+    // Base implementation with conditional sections
     if (hflash == NULL || pFlashConfig == NULL || pFlashConfig->spi_handle == NULL ||
         pFlashConfig->cs_port == NULL || pFlashConfig->cs_pin == 0)
     {
@@ -476,7 +294,7 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hflash, const W25Q_ConfigTypeDe
     // Copy configuration to the handle
     memcpy(&hflash->config, pFlashConfig, sizeof(W25Q_ConfigTypeDef));
 
-    // Set default chip parameters if not explicitly provided (e.g., if total_size_bytes is 0)
+    // Set default chip parameters if not explicitly provided
     if (hflash->config.page_size == 0)
         hflash->config.page_size = W25Q_DEFAULT_PAGE_SIZE;
     if (hflash->config.sector_size == 0)
@@ -485,51 +303,48 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hflash, const W25Q_ConfigTypeDe
         hflash->config.block_32k_size = W25Q_DEFAULT_BLOCK32_SIZE;
     if (hflash->config.block_64k_size == 0)
         hflash->config.block_64k_size = W25Q_DEFAULT_BLOCK64_SIZE;
-    // total_size_bytes should ideally be known and set by the user based on the actual chip.
 
     W25Q_CS_Disable(hflash);
 
     // Store the global handle for callbacks
     g_w25q_handle = hflash;
 
-    // Initialize state
+#ifdef W25QXX_USE_DMA
+    // Initialize DMA state - THIS SECTION IS CONDITIONAL
     hflash->state = W25Q_STATE_READY;
     hflash->tx_complete = 0;
     hflash->rx_complete = 0;
     hflash->dma_error = 0;
+#endif
 
-    // Initialize FreeRTOS synchronization primitives if RTOS is enabled
-    if (hflash->config.use_rtos) {
+#ifdef W25QXX_USE_RTOS
+    // Initialize FreeRTOS synchronization primitives - THIS SECTION IS CONDITIONAL
+    if (hflash->config.use_rtos)
+    {
         hflash->mutex = xSemaphoreCreateMutex();
         hflash->tx_semaphore = xSemaphoreCreateBinary();
         hflash->rx_semaphore = xSemaphoreCreateBinary();
         hflash->txrx_semaphore = xSemaphoreCreateBinary();
-        
-        if (hflash->mutex == NULL || hflash->tx_semaphore == NULL || 
-            hflash->rx_semaphore == NULL || hflash->txrx_semaphore == NULL) {
-            // Clean up if any creation failed
+
+        if (hflash->mutex == NULL || hflash->tx_semaphore == NULL || hflash->rx_semaphore == NULL || hflash->txrx_semaphore == NULL || hflash->cmd_queue == NULL)
+        {
             W25Q_DeInit(hflash);
             return W25Q_ERROR;
         }
-        
-        // Create command queue
+
         hflash->cmd_queue = xQueueCreate(10, sizeof(W25Q_QueueItem));
-        if (hflash->cmd_queue == NULL) {
+        if (hflash->cmd_queue == NULL)
+        {
             W25Q_DeInit(hflash);
             return W25Q_ERROR;
         }
     }
+#endif
 
-    // IMPORTANT FIX: Use direct SPI communication for initial JEDEC ID read during initialization
-    // instead of using the RTOS version which requires the task to be running
+    // IMPORTANT: Read JEDEC ID during initialization (always using direct SPI)
     uint8_t mfg_id_read;
     uint16_t dev_id_read;
-    uint8_t tx_buffer[4] = {W25Q_CMD_JEDEC_ID, W25Q_DATA_DUMMY, W25Q_DATA_DUMMY, W25Q_DATA_DUMMY};
-    uint8_t rx_buffer[4];
-
-    W25Q_CS_Enable(hflash);
-    W25Q_StatusTypeDef status = W25Q_SPI_TransmitReceive(hflash, tx_buffer, rx_buffer, 4);
-    W25Q_CS_Disable(hflash);
+    W25Q_StatusTypeDef status = W25Q_ReadJEDECID(hflash, &mfg_id_read, &dev_id_read);
 
     if (status != W25Q_OK)
     {
@@ -538,37 +353,43 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hflash, const W25Q_ConfigTypeDe
     }
 
     // Parse JEDEC ID from response
-    mfg_id_read = rx_buffer[1];
-    dev_id_read = (uint16_t)(rx_buffer[2] << 8) | rx_buffer[3];
-
-    // Store the discovered IDs in the handle
     hflash->mfg_id = mfg_id_read;
     hflash->dev_id = dev_id_read;
 
-    // You might want to add checks here for expected Manufacturer/Device IDs
-    // For Winbond, Manufacturer ID is typically 0xEF. Device ID varies (e.g., 0x4016 for W25Q32FV, 0x4018 for W25Q128FV)
+    // Check for expected Manufacturer ID
     if (hflash->mfg_id != W25Q64BV_MFG_ID)
     {
-        // Log an error or return a specific error code
         W25Q_DeInit(hflash);
         return W25Q_ERROR;
     }
-    
-    // Start the FreeRTOS task if RTOS is enabled
-    if (hflash->config.use_rtos) {
+
+#ifdef W25QXX_USE_RTOS
+    // Start the FreeRTOS task - THIS SECTION IS CONDITIONAL
+    if (hflash->config.use_rtos)
+    {
         W25Q_StartTask(hflash);
     }
-    
+#endif
+
     return W25Q_OK;
 }
 
+/**
+ * @brief Deinitialize the W25Q Flash memory device
+ *
+ * @param hflash Pointer to the W25Q Flash memory handle
+ * @return W25Q_StatusTypeDef Status of the deinitialization operation
+ *
+ * This function performs cleanup and reset operations for the W25Q Flash memory device,
+ * including releasing RTOS resources if applicable and resetting device configuration.
+ */
 W25Q_StatusTypeDef W25Q_DeInit(W25Q_HandleTypeDef *hflash)
 {
     if (hflash == NULL)
     {
         return W25Q_PARAM_ERR;
     }
-    
+#ifdef W25QXX_USE_RTOS
     // Stop the FreeRTOS task if it's running
     if (hflash->config.use_rtos) {
         W25Q_StopTask(hflash);
@@ -595,7 +416,7 @@ W25Q_StatusTypeDef W25Q_DeInit(W25Q_HandleTypeDef *hflash)
             hflash->cmd_queue = NULL;
         }
     }
-    
+#endif
     W25Q_CS_Disable(hflash); // Ensure CS is inactive
     
     g_w25q_handle = NULL;
@@ -607,19 +428,37 @@ W25Q_StatusTypeDef W25Q_DeInit(W25Q_HandleTypeDef *hflash)
     return W25Q_OK;
 }
 
+/**
+ * @brief Reads the JEDEC ID of the W25Q Flash memory device.
+ *
+ * This function retrieves the manufacturer ID and device ID from the W25Q Flash memory
+ * using the JEDEC ID command. It supports both polling and RTOS-based communication modes.
+ *
+ * @param hflash Pointer to the W25Q Flash memory handle
+ * @param pManufacturerID Pointer to store the manufacturer ID
+ * @param pDeviceID Pointer to store the device ID
+ *
+ * @return W25Q_StatusTypeDef Status of the JEDEC ID read operation
+ *         - W25Q_OK: Successfully read JEDEC ID
+ *         - W25Q_PARAM_ERR: Invalid input parameters
+ *         - Other error codes may be returned based on communication status
+ */
 W25Q_StatusTypeDef W25Q_ReadJEDECID(W25Q_HandleTypeDef *hflash, uint8_t *pManufacturerID, uint16_t *pDeviceID)
 {
     if (hflash == NULL || pManufacturerID == NULL || pDeviceID == NULL)
     {
         return W25Q_PARAM_ERR;
     }
-    
+
+#ifdef W25QXX_USE_RTOS
     // If RTOS is enabled, task is created, and we're not in an ISR, use the thread-safe version
     if (hflash->config.use_rtos && hflash->task_handle != NULL && !xPortIsInsideInterrupt()) {
         return W25Q_ReadJEDECID_RTOS(hflash, pManufacturerID, pDeviceID);
     }
+#endif
 
-    uint8_t tx_buffer[4] = {W25Q_CMD_JEDEC_ID, W25Q_DATA_DUMMY, W25Q_DATA_DUMMY, W25Q_DATA_DUMMY}; // Cmd + 3 dummy bytes
+    // Regular polling implementation
+    uint8_t tx_buffer[4] = {W25Q_CMD_JEDEC_ID, W25Q_DATA_DUMMY, W25Q_DATA_DUMMY, W25Q_DATA_DUMMY};
     uint8_t rx_buffer[4];
 
     W25Q_CS_Enable(hflash);
@@ -628,12 +467,26 @@ W25Q_StatusTypeDef W25Q_ReadJEDECID(W25Q_HandleTypeDef *hflash, uint8_t *pManufa
 
     if (status == W25Q_OK)
     {
-        *pManufacturerID = rx_buffer[1]; // JEDEC ID format: Mfr. ID (1 byte), Device ID (2 bytes)
+        *pManufacturerID = rx_buffer[1];
         *pDeviceID = (uint16_t)(rx_buffer[2] << 8) | rx_buffer[3];
     }
     return status;
 }
 
+/**
+ * @brief Reads the first status register of the W25Q Flash memory device.
+ *
+ * This function retrieves the contents of the first status register from the W25Q Flash memory
+ * using the appropriate read status register command.
+ *
+ * @param hflash Pointer to the W25Q Flash memory handle
+ * @param pStatusReg1 Pointer to store the value of the first status register
+ *
+ * @return W25Q_StatusTypeDef Status of the status register read operation
+ *         - W25Q_OK: Successfully read status register
+ *         - W25Q_PARAM_ERR: Invalid input parameters
+ *         - Other error codes may be returned based on communication status
+ */
 W25Q_StatusTypeDef W25Q_ReadStatusRegister1(W25Q_HandleTypeDef *hflash, uint8_t *pStatusReg1)
 {
     if (hflash == NULL || pStatusReg1 == NULL)
@@ -659,6 +512,20 @@ W25Q_StatusTypeDef W25Q_ReadStatusRegister1(W25Q_HandleTypeDef *hflash, uint8_t 
     return status;
 }
 
+/**
+ * @brief Reads the second status register of the W25Q Flash memory device.
+ *
+ * This function retrieves the contents of the second status register from the W25Q Flash memory
+ * using the appropriate read status register command.
+ *
+ * @param hflash Pointer to the W25Q Flash memory handle
+ * @param pStatusReg2 Pointer to store the value of the second status register
+ *
+ * @return W25Q_StatusTypeDef Status of the status register read operation
+ *         - W25Q_OK: Successfully read status register
+ *         - W25Q_PARAM_ERR: Invalid input parameters
+ *         - Other error codes may be returned based on communication status
+ */
 W25Q_StatusTypeDef W25Q_ReadStatusRegister2(W25Q_HandleTypeDef *hflash, uint8_t *pStatusReg2)
 {
     if (hflash == NULL || pStatusReg2 == NULL)
@@ -684,12 +551,25 @@ W25Q_StatusTypeDef W25Q_ReadStatusRegister2(W25Q_HandleTypeDef *hflash, uint8_t 
     return status;
 }
 
+/**
+ * @brief Calculates the timeout duration for various W25Qxx flash memory operations.
+ *
+ * This function determines the maximum expected time for different flash memory operations
+ * based on the device configuration and operation type. The timeout values are derived from
+ * typical W25Qxx datasheet specifications.
+ *
+ * @param hflash Pointer to the W25Q Flash memory handle
+ * @param operation_type Type of flash memory operation (e.g., page program, sector erase)
+ * @param data_size Size of data involved in the operation
+ *
+ * @return uint32_t Timeout duration in milliseconds
+ *         - Returns 0 for invalid handle or unknown operation type
+ *         - Timeout values are maximum times from datasheets
+ *
+ * @note Timeout values are conservative estimates and may vary by specific device model
+ */
 uint32_t W25Q_CalculateTimeout(const W25Q_HandleTypeDef *hflash, uint8_t operation_type, uint32_t data_size)
 {
-    // These are typical maximum times from W25Qxx datasheets.
-    // Always refer to the specific datasheet for your part number.
-    // These are *maximum* times. Average times are much lower.
-    // For safety, we use max times.
     if (hflash == NULL)
         return 0; // Invalid handle
 
@@ -723,47 +603,116 @@ uint32_t W25Q_CalculateTimeout(const W25Q_HandleTypeDef *hflash, uint8_t operati
     }
 }
 
+/**
+ * @brief Reads data from the W25Q Flash memory device.
+ *
+ * This function reads a specified number of bytes from a given address in the flash memory.
+ * It supports multiple read modes including standard polling, DMA, and RTOS-based transfers.
+ *
+ * @param hflash Pointer to the W25Q Flash memory handle
+ * @param Address Starting memory address to read from
+ * @param pBuffer Pointer to the buffer where read data will be stored
+ * @param Size Number of bytes to read
+ *
+ * @return W25Q_StatusTypeDef
+ *         - W25Q_OK if read is successful
+ *         - W25Q_PARAM_ERR for invalid parameters
+ *         - Error status from underlying SPI or DMA transfer
+ *
+ * @note Supports optional DMA and RTOS transfer modes based on configuration
+ */
 W25Q_StatusTypeDef W25Q_Read(W25Q_HandleTypeDef *hflash, uint32_t Address, uint8_t *pBuffer, uint32_t Size)
 {
     if (hflash == NULL || pBuffer == NULL || Size == 0)
     {
         return W25Q_PARAM_ERR;
     }
-    
-    // If RTOS is enabled and we're not in an ISR, use the thread-safe version
+
+#ifdef W25QXX_USE_RTOS
+    // RTOS-specific routing
     if (hflash->config.use_rtos && !xPortIsInsideInterrupt()) {
         return W25Q_Read_RTOS(hflash, Address, pBuffer, Size);
     }
+#endif
 
-    uint8_t tx_header[5];              // Command + 3-byte address + 1 dummy byte for Fast Read
-    tx_header[0] = W25Q_CMD_FAST_READ; // Using Fast Read for better performance
+#ifdef W25QXX_USE_DMA
+    // DMA-specific routing
+    if (hflash->config.use_dma && hflash->config.hdmarx != NULL && Size > 16)
+    {
+        return W25Q_Read_DMA(hflash, Address, pBuffer, Size);
+    }
+#endif
+
+    // Regular polling implementation - ALWAYS AVAILABLE
+    uint8_t tx_header[5];
+    tx_header[0] = W25Q_CMD_FAST_READ;
     tx_header[1] = (Address >> 16) & 0xFF;
     tx_header[2] = (Address >> 8) & 0xFF;
     tx_header[3] = Address & 0xFF;
-    tx_header[4] = W25Q_DATA_DUMMY; // Dummy byte
+    tx_header[4] = W25Q_DATA_DUMMY;
 
     W25Q_CS_Enable(hflash);
-    W25Q_StatusTypeDef status = W25Q_SPI_Transmit(hflash, tx_header, 5); // Send command, address, dummy
+    W25Q_StatusTypeDef status = W25Q_SPI_Transmit(hflash, tx_header, 5);
     if (status == W25Q_OK)
     {
-        status = W25Q_SPI_Receive(hflash, pBuffer, Size); // Receive data
+        status = W25Q_SPI_Receive(hflash, pBuffer, Size);
     }
     W25Q_CS_Disable(hflash);
     return status;
 }
 
+/**
+ * @brief Write a page of data to a W25QXX flash memory device
+ *
+ * @param hflash Pointer to the flash device handle
+ * @param Address Starting memory address to write to
+ * @param pBuffer Pointer to the data buffer to be written
+ * @param Size Number of bytes to write (must not exceed page size)
+ *
+ * @return W25Q_StatusTypeDef
+ *         - W25Q_OK if write is successful
+ *         - W25Q_PARAM_ERR for invalid parameters
+ *         - Error status from underlying SPI or DMA transfer
+ *
+ * @note Supports optional DMA and RTOS transfer modes based on configuration
+ * @note Writes are limited to a single page and must be page-aligned
+ */
 W25Q_StatusTypeDef W25Q_WritePage(W25Q_HandleTypeDef *hflash, uint32_t Address, const uint8_t *pBuffer, uint32_t Size)
 {
     if (hflash == NULL || pBuffer == NULL || Size == 0 || Size > hflash->config.page_size /*|| (Address % hflash->config.page_size) != 0*/)
     {
         return W25Q_PARAM_ERR;
     }
-    
+
+#ifdef W25QXX_USE_RTOS
     // If RTOS is enabled and we're not in an ISR, use the thread-safe version
     if (hflash->config.use_rtos && !xPortIsInsideInterrupt()) {
         return W25Q_WritePage_RTOS(hflash, Address, pBuffer, Size);
     }
+#endif
 
+#ifdef W25QXX_USE_DMA
+    // If DMA is configured and buffer is suitable, use DMA version
+    if (hflash->config.use_dma && hflash->config.hdmatx != NULL && Size > 16)
+    {
+        W25Q_StatusTypeDef status = W25Q_WriteEnable(hflash);
+        if (status != W25Q_OK)
+        {
+            return status;
+        }
+
+        status = W25Q_WritePage_DMA(hflash, Address, pBuffer, Size);
+        if (status != W25Q_OK)
+        {
+            return status;
+        }
+
+        uint32_t timeout_ms = W25Q_CalculateTimeout(hflash, W25Q_CMD_PAGE_PROGRAM, Size);
+        return W25Q_WaitForDMATransferComplete(hflash, timeout_ms);
+    }
+#endif
+
+    // Regular polling implementation
     W25Q_StatusTypeDef status;
     uint32_t timeout_ms = W25Q_CalculateTimeout(hflash, W25Q_CMD_PAGE_PROGRAM, Size);
 
@@ -788,15 +737,19 @@ W25Q_StatusTypeDef W25Q_WritePage(W25Q_HandleTypeDef *hflash, uint32_t Address, 
         return status;
     }
 
-    // Optional: Verify successful program by checking status register bits (e.g., Program Fail)
-    // This requires specific bit definitions for program/erase fail.
-    // uint8_t sr2;
-    // W25Q_ReadStatusRegister2(hflash, &sr2);
-    // if (sr2 & W25Q_SR2_PFAIL_BIT) return W25Q_PROG_ERR; // If such a bit exists
-
     return W25Q_OK;
 }
 
+/**
+ * @brief Erases a single 4KB sector of the W25QXX flash memory.
+ *
+ * @param hflash Pointer to the W25Q flash device handle
+ * @param SectorAddress Base address of the sector to be erased (must be sector-aligned)
+ * @return W25Q_StatusTypeDef Status of the erase operation (W25Q_OK if successful)
+ *
+ * @note The sector address must be aligned to the sector size of the flash device.
+ * @note This function supports both polling and DMA modes depending on configuration.
+ */
 W25Q_StatusTypeDef W25Q_EraseSector(W25Q_HandleTypeDef *hflash, uint32_t SectorAddress)
 {
     // Address must be aligned to sector boundary
@@ -804,11 +757,13 @@ W25Q_StatusTypeDef W25Q_EraseSector(W25Q_HandleTypeDef *hflash, uint32_t SectorA
     {
         return W25Q_PARAM_ERR;
     }
-    
+
+#ifdef W25QXX_USE_RTOS
     // If RTOS is enabled and we're not in an ISR, use the thread-safe version
     if (hflash->config.use_rtos && !xPortIsInsideInterrupt()) {
         return W25Q_EraseSector_RTOS(hflash, SectorAddress);
     }
+#endif
 
     W25Q_StatusTypeDef status;
     uint32_t timeout_ms = W25Q_CalculateTimeout(hflash, W25Q_CMD_SECTOR_ERASE_4KB, 0); // 0 for data_size for erase, only one sector!
@@ -838,42 +793,62 @@ W25Q_StatusTypeDef W25Q_EraseSector(W25Q_HandleTypeDef *hflash, uint32_t SectorA
     return W25Q_OK;
 }
 
-// DMA completion callbacks
+// DMA spesific functions
+#ifdef W25QXX_USE_DMA
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
 {
-    // We know there's only one flash chip, so just use the global handle
+#ifdef W25QXX_USE_DMA
     if (g_w25q_handle != NULL && g_w25q_handle->config.spi_handle == hspi)
     {
         W25Q_TxCpltCallback(g_w25q_handle);
     }
+#endif
 }
 
 void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
 {
+#ifdef W25QXX_USE_DMA
     if (g_w25q_handle != NULL && g_w25q_handle->config.spi_handle == hspi)
     {
         W25Q_RxCpltCallback(g_w25q_handle);
     }
+#endif
 }
 
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
+#ifdef W25QXX_USE_DMA
     if (g_w25q_handle != NULL && g_w25q_handle->config.spi_handle == hspi)
     {
         W25Q_TxRxCpltCallback(g_w25q_handle);
     }
+#endif
 }
 
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
 {
+#ifdef W25QXX_USE_DMA
     if (g_w25q_handle != NULL && g_w25q_handle->config.spi_handle == hspi)
     {
         W25Q_DMAErrorCallback(g_w25q_handle);
     }
+#endif
 }
 
+/**
+ * @brief Wait for a DMA transfer to complete for the W25Q flash device.
+ *
+ * @param hflash Pointer to the W25Q flash device handle
+ * @param Timeout Maximum time to wait for transfer completion in milliseconds
+ * @return W25Q_StatusTypeDef Status of the wait operation
+ *         - W25Q_OK if transfer completed successfully
+ *         - W25Q_TIMEOUT if transfer did not complete within specified time
+ *         - W25Q_ERROR if a DMA error occurred
+ *         - W25Q_PARAM_ERR if invalid handle is provided
+ */
 W25Q_StatusTypeDef W25Q_WaitForDMATransferComplete(W25Q_HandleTypeDef *hflash, uint32_t Timeout)
 {
+#ifdef W25QXX_USE_DMA
     if (hflash == NULL)
     {
         return W25Q_PARAM_ERR;
@@ -892,12 +867,29 @@ W25Q_StatusTypeDef W25Q_WaitForDMATransferComplete(W25Q_HandleTypeDef *hflash, u
     {
         return W25Q_ERROR;
     }
-    
-    return W25Q_OK;
+
+    return W25Q_OK
+#else
+    return W25Q_ERROR;
+#endif
 }
 
+/**
+ * @brief Reads data from the W25Q flash memory using DMA transfer.
+ *
+ * @param hflash Pointer to the W25Q flash device handle
+ * @param Address Starting memory address to read from
+ * @param pBuffer Pointer to the buffer where read data will be stored
+ * @param Size Number of bytes to read
+ * @return W25Q_StatusTypeDef Status of the read operation
+ *         - W25Q_OK if read was successful
+ *         - W25Q_PARAM_ERR if invalid parameters are provided
+ *         - W25Q_ERROR if DMA transfer failed
+ * @note This function uses DMA for efficient data transfer and requires W25QXX_USE_DMA to be defined
+ */
 W25Q_StatusTypeDef W25Q_Read_DMA(W25Q_HandleTypeDef *hflash, uint32_t Address, uint8_t *pBuffer, uint32_t Size)
 {
+#ifdef W25QXX_USE_DMA
     if (hflash == NULL || pBuffer == NULL || Size == 0 || hflash->config.hdmarx == NULL)
     {
         return W25Q_PARAM_ERR;
@@ -936,10 +928,29 @@ W25Q_StatusTypeDef W25Q_Read_DMA(W25Q_HandleTypeDef *hflash, uint32_t Address, u
     }
     
     return W25Q_OK;
+#else
+    return W25Q_ERROR;
+#endif
 }
 
+/**
+ * @brief Writes a page of data to the W25QXX flash memory using DMA.
+ *
+ * @param hflash Pointer to the W25Q flash handle
+ * @param Address Memory address to write the page
+ * @param pBuffer Pointer to the data buffer to be written
+ * @param Size Number of bytes to write (must not exceed page size)
+ *
+ * @return W25Q_StatusTypeDef
+ *         - W25Q_OK if write operation is successful
+ *         - W25Q_PARAM_ERR if invalid parameters are provided
+ *         - W25Q_ERROR if DMA transfer failed
+ *
+ * @note This function uses DMA for efficient page programming and requires W25QXX_USE_DMA to be defined
+ */
 W25Q_StatusTypeDef W25Q_WritePage_DMA(W25Q_HandleTypeDef *hflash, uint32_t Address, const uint8_t *pBuffer, uint32_t Size)
 {
+#ifdef W25QXX_USE_DMA
     if (hflash == NULL || pBuffer == NULL || Size == 0 || Size > hflash->config.page_size || 
         (Address % hflash->config.page_size) != 0 || hflash->config.hdmatx == NULL)
     {
@@ -985,9 +996,224 @@ W25Q_StatusTypeDef W25Q_WritePage_DMA(W25Q_HandleTypeDef *hflash, uint32_t Addre
     }
     
     return W25Q_OK;
+#else
+    return W25Q_ERROR;
+#endif
 }
 
+/**
+ * @brief Transmits data over SPI using DMA for the W25Q Flash memory device
+ * @param hflash Pointer to the W25Q Flash memory handle
+ * @param pData Pointer to the buffer containing data to transmit
+ * @param Size Number of bytes to transmit
+ * @return W25Q_StatusTypeDef Status of the DMA SPI transmission operation
+ *         - W25Q_OK: DMA Transmission successful
+ *         - W25Q_PARAM_ERR: Invalid input parameters
+ *         - W25Q_ERROR: DMA Transmission failed
+ * @note This function is only available when W25QXX_USE_DMA is defined
+ */
+static W25Q_StatusTypeDef W25Q_SPI_Transmit_DMA(W25Q_HandleTypeDef *hflash, uint8_t *pData, uint16_t Size)
+{
+#ifdef W25QXX_USE_DMA
+    if (hflash == NULL || pData == NULL || Size == 0 || hflash->config.hdmatx == NULL)
+    {
+        return W25Q_PARAM_ERR;
+    }
+
+    hflash->state = W25Q_STATE_BUSY_TX;
+    hflash->tx_complete = 0;
+    hflash->dma_error = 0;
+
+    if (HAL_SPI_Transmit_DMA(hflash->config.spi_handle, pData, Size) == HAL_OK)
+    {
+        return W25Q_OK;
+    }
+
+    hflash->state = W25Q_STATE_READY;
+    return W25Q_ERROR;
+#else
+    // If DMA is not enabled, this function should not be called
+    (void)hflash;
+    (void)pData;
+    (void)Size;
+    return W25Q_ERROR;
+#endif
+}
+
+/**
+ * @brief Callback function for transmit (TX) DMA completion
+ *
+ * This function is called when a DMA transmission to the W25Q Flash memory is complete.
+ * It updates the flash handle state, disables the chip select, and optionally signals
+ * completion via an RTOS semaphore or invokes a user-defined callback.
+ *
+ * @param hflash Pointer to the W25Q Flash memory handle
+ */
+static void W25Q_TxCpltCallback(W25Q_HandleTypeDef *hflash)
+{
+#ifdef W25QXX_USE_DMA
+    // DMA state variables are available
+    hflash->tx_complete = 1;
+    hflash->state = W25Q_STATE_READY;
+
+    // Deassert CS pin
+    W25Q_CS_Disable(hflash);
+
+#ifdef W25QXX_USE_RTOS
+    // RTOS-specific code - add this guard
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    // Signal completion via semaphore if in RTOS mode
+    if (hflash->config.use_rtos && hflash->tx_semaphore != NULL)
+    {
+        xSemaphoreGiveFromISR(hflash->tx_semaphore, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+#endif
+
+    // Call user callback if defined
+    if (hflash->config.TxCpltCallback != NULL)
+    {
+        hflash->config.TxCpltCallback(hflash);
+    }
+#endif
+}
+
+/**
+ * @brief Callback function for receive (RX) DMA completion
+ *
+ * This function is called when a DMA receive operation to the W25Q Flash memory is complete.
+ * It updates the flash handle state, disables the chip select, and optionally signals
+ * completion via an RTOS semaphore or invokes a user-defined callback.
+ *
+ * @param hflash Pointer to the W25Q Flash memory handle
+ */
+static void W25Q_RxCpltCallback(W25Q_HandleTypeDef *hflash)
+{
+#ifdef W25QXX_USE_DMA
+    // DMA state variables are available
+    hflash->tx_complete = 1;
+    hflash->state = W25Q_STATE_READY;
+
+    // Deassert CS pin
+    W25Q_CS_Disable(hflash);
+
+#ifdef W25QXX_USE_RTOS
+    // RTOS-specific code - add this guard
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    // Signal completion via semaphore if in RTOS mode
+    if (hflash->config.use_rtos && hflash->tx_semaphore != NULL)
+    {
+        xSemaphoreGiveFromISR(hflash->tx_semaphore, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+#endif
+
+    // Call user callback if defined
+    if (hflash->config.TxCpltCallback != NULL)
+    {
+        hflash->config.TxCpltCallback(hflash);
+    }
+#endif
+}
+
+/**
+ * @brief Callback function for combined TX/RX DMA completion
+ *
+ * This function is called when a DMA transmit and receive operation to the W25Q Flash memory is complete.
+ * It updates the flash handle state, disables the chip select, and optionally signals
+ * completion via an RTOS semaphore or invokes a user-defined callback.
+ *
+ * @param hflash Pointer to the W25Q Flash memory handle
+ */
+static void W25Q_TxRxCpltCallback(W25Q_HandleTypeDef *hflash)
+{
+#ifdef W25QXX_USE_DMA
+    // DMA state variables are available
+    hflash->tx_complete = 1;
+    hflash->state = W25Q_STATE_READY;
+
+    // Deassert CS pin
+    W25Q_CS_Disable(hflash);
+
+#ifdef W25QXX_USE_RTOS
+    // RTOS-specific code - add this guard
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    // Signal completion via semaphore if in RTOS mode
+    if (hflash->config.use_rtos && hflash->tx_semaphore != NULL)
+    {
+        xSemaphoreGiveFromISR(hflash->tx_semaphore, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+#endif
+
+    // Call user callback if defined
+    if (hflash->config.TxCpltCallback != NULL)
+    {
+        hflash->config.TxCpltCallback(hflash);
+    }
+#endif
+}
+
+/**
+ * @brief Callback function for DMA error handling
+ *
+ * This function is called when a DMA error occurs during SPI communication with the W25Q Flash memory.
+ * It sets the error flag, resets the flash handle state, disables the chip select, and
+ * optionally signals semaphores in an RTOS environment to unblock waiting tasks.
+ *
+ * @param hflash Pointer to the W25Q Flash memory handle
+ */
+static void W25Q_DMAErrorCallback(W25Q_HandleTypeDef *hflash)
+{
+#ifdef W25QXX_USE_DMA
+#ifdef W25QXX_USE_RTOS
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+#endif
+
+    hflash->dma_error = 1;
+    hflash->state = W25Q_STATE_READY;
+
+    // Deassert CS pin
+    W25Q_CS_Disable(hflash);
+
+#ifdef W25QXX_USE_RTOS
+    // Signal all semaphores to unblock any waiting tasks
+    if (hflash->config.use_rtos)
+    {
+        if (hflash->tx_semaphore != NULL)
+        {
+            xSemaphoreGiveFromISR(hflash->tx_semaphore, &xHigherPriorityTaskWoken);
+        }
+        if (hflash->rx_semaphore != NULL)
+        {
+            xSemaphoreGiveFromISR(hflash->rx_semaphore, &xHigherPriorityTaskWoken);
+        }
+        if (hflash->txrx_semaphore != NULL)
+        {
+            xSemaphoreGiveFromISR(hflash->txrx_semaphore, &xHigherPriorityTaskWoken);
+        }
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+#endif
+#endif // W25QXX_USE_RTOS
+}
+#endif // W25QXX_USE_DMA
+
 // FreeRTOS specific functions
+#ifdef W25QXX_USE_RTOS
+
+/**
+ * @brief Starts a FreeRTOS task for the W25Q flash device.
+ *
+ * @param hflash Pointer to the W25Q flash device handle
+ * @return W25Q_StatusTypeDef Status of task creation
+ *         - W25Q_OK: Task created successfully
+ *         - W25Q_PARAM_ERR: Invalid handle or RTOS not configured
+ *         - W25Q_ERROR: Failed to create task
+ */
 W25Q_StatusTypeDef W25Q_StartTask(W25Q_HandleTypeDef *hflash)
 {
     if (hflash == NULL || !hflash->config.use_rtos) {
@@ -1013,6 +1239,15 @@ W25Q_StatusTypeDef W25Q_StartTask(W25Q_HandleTypeDef *hflash)
     return W25Q_OK;
 }
 
+/**
+ * @brief Stops the FreeRTOS task for the W25Q flash device.
+ *
+ * @param hflash Pointer to the W25Q flash device handle
+ * @return W25Q_StatusTypeDef Status of task stopping
+ *         - W25Q_OK: Task stopped successfully
+ *         - W25Q_PARAM_ERR: Invalid handle or RTOS not configured
+ *         - W25Q_ERROR: Failed to stop task
+ */
 W25Q_StatusTypeDef W25Q_StopTask(W25Q_HandleTypeDef *hflash)
 {
     if (hflash == NULL || !hflash->config.use_rtos) {
@@ -1028,6 +1263,18 @@ W25Q_StatusTypeDef W25Q_StopTask(W25Q_HandleTypeDef *hflash)
     return W25Q_OK;
 }
 
+/**
+ * @brief Reads data from the W25Q flash memory using FreeRTOS.
+ *
+ * @param hflash Pointer to the W25Q flash device handle
+ * @param Address Starting memory address to read from
+ * @param pBuffer Pointer to the buffer where read data will be stored
+ * @param Size Number of bytes to read
+ * @return W25Q_StatusTypeDef Status of the read operation
+ *         - W25Q_OK if read was successful
+ *         - W25Q_PARAM_ERR if invalid parameters are provided
+ *         - W25Q_ERROR if DMA transfer failed
+ */
 W25Q_StatusTypeDef W25Q_Read_RTOS(W25Q_HandleTypeDef *hflash, uint32_t Address, uint8_t *pBuffer, uint32_t Size)
 {
     if (hflash == NULL || pBuffer == NULL || Size == 0 || !hflash->config.use_rtos) {
@@ -1069,6 +1316,20 @@ W25Q_StatusTypeDef W25Q_Read_RTOS(W25Q_HandleTypeDef *hflash, uint32_t Address, 
     return status;
 }
 
+/**
+ * @brief Writes a page of data to the W25QXX flash memory using FreeRTOS.
+ *
+ * @param hflash Pointer to the W25Q flash handle
+ * @param Address Memory address to write the page
+ * @param pBuffer Pointer to the data buffer to be written
+ * @param Size Number of bytes to write (must not exceed page size)
+ * @return W25Q_StatusTypeDef Status of the write operation
+ *         - W25Q_OK if write was successful
+ *         - W25Q_PARAM_ERR if invalid parameters are provided
+ *         - W25Q_ERROR if DMA transfer failed
+ *         - W25Q_TIMEOUT if operation timed out
+ *         - W25Q_BUSY if device is busy
+ */
 W25Q_StatusTypeDef W25Q_WritePage_RTOS(W25Q_HandleTypeDef *hflash, uint32_t Address, const uint8_t *pBuffer, uint32_t Size)
 {
     if (hflash == NULL || pBuffer == NULL || Size == 0 || Size > hflash->config.page_size || 
@@ -1112,6 +1373,18 @@ W25Q_StatusTypeDef W25Q_WritePage_RTOS(W25Q_HandleTypeDef *hflash, uint32_t Addr
     return status;
 }
 
+/**
+ * @brief Erase a sector of the W25Q Flash memory using RTOS
+ *
+ * @param hflash Pointer to the W25Q flash handle
+ * @param SectorAddress Address of the sector to be erased (must be sector-aligned)
+ * @return W25Q_StatusTypeDef
+ *         - W25Q_OK if sector erase was successful
+ *         - W25Q_PARAM_ERR if invalid parameters are provided
+ *         - W25Q_ERROR if operation failed
+ *         - W25Q_TIMEOUT if operation timed out
+ *         - W25Q_BUSY if device is busy
+ */
 W25Q_StatusTypeDef W25Q_EraseSector_RTOS(W25Q_HandleTypeDef *hflash, uint32_t SectorAddress)
 {
     if (hflash == NULL || (SectorAddress % hflash->config.sector_size) != 0 || !hflash->config.use_rtos) {
@@ -1154,6 +1427,19 @@ W25Q_StatusTypeDef W25Q_EraseSector_RTOS(W25Q_HandleTypeDef *hflash, uint32_t Se
     return status;
 }
 
+/**
+ * @brief Reads the JEDEC ID of the W25QXX flash memory using FreeRTOS.
+ *
+ * @param hflash Pointer to the W25Q flash handle
+ * @param pManufacturerID Pointer to store the manufacturer ID
+ * @param pDeviceID Pointer to store the device ID
+ * @return W25Q_StatusTypeDef Status of the read operation
+ *         - W25Q_OK if read was successful
+ *         - W25Q_PARAM_ERR if invalid parameters are provided
+ *         - W25Q_ERROR if operation failed
+ *         - W25Q_TIMEOUT if operation timed out
+ *         - W25Q_BUSY if device is busy
+ */
 W25Q_StatusTypeDef W25Q_ReadJEDECID_RTOS(W25Q_HandleTypeDef *hflash, uint8_t *pManufacturerID, uint16_t *pDeviceID)
 {
     if (hflash == NULL || pManufacturerID == NULL || pDeviceID == NULL || !hflash->config.use_rtos) {
@@ -1201,3 +1487,96 @@ W25Q_StatusTypeDef W25Q_ReadJEDECID_RTOS(W25Q_HandleTypeDef *hflash, uint8_t *pM
     
     return status;
 }
+
+#ifdef W25QXX_USE_RTOS
+/**
+ * @brief FreeRTOS task function for handling flash memory operations asynchronously
+ *
+ * This task manages queued flash memory operations in a thread-safe manner using FreeRTOS primitives.
+ * It supports various operations such as reading, writing pages, erasing sectors, reading device ID,
+ * and reading status registers.
+ *
+ * @param argument Pointer to the W25Q Flash memory handle used for context
+ *
+ * @note This is an internal task function for managing flash operations in an RTOS environment
+ */
+static void W25Q_Task(void *argument)
+{
+    W25Q_HandleTypeDef *hflash = (W25Q_HandleTypeDef *)argument;
+    W25Q_QueueItem item;
+    W25Q_StatusTypeDef status;
+
+    for (;;)
+    {
+        // Wait for a command from the queue
+        if (xQueueReceive(hflash->cmd_queue, &item, portMAX_DELAY) == pdTRUE)
+        {
+            // Take the mutex to ensure exclusive access to the flash
+            if (xSemaphoreTake(hflash->mutex, portMAX_DELAY) == pdTRUE)
+            {
+                // Process the command
+                switch (item.cmd_type)
+                {
+                case W25Q_CMD_READ:
+                    status = W25Q_Read_DMA(hflash, item.address, item.buffer, item.size);
+                    if (status == W25Q_OK)
+                    {
+                        // Wait for DMA completion
+                        xSemaphoreTake(hflash->rx_semaphore, portMAX_DELAY);
+                        status = hflash->dma_error ? W25Q_ERROR : W25Q_OK;
+                    }
+                    break;
+
+                case W25Q_CMD_WRITE_PAGE:
+                    status = W25Q_WritePage_DMA(hflash, item.address, item.buffer, item.size);
+                    if (status == W25Q_OK)
+                    {
+                        // Wait for DMA completion
+                        xSemaphoreTake(hflash->tx_semaphore, portMAX_DELAY);
+                        status = hflash->dma_error ? W25Q_ERROR : W25Q_OK;
+
+                        // Wait for flash to complete the write operation
+                        uint32_t timeout = W25Q_CalculateTimeout(hflash, W25Q_CMD_PAGE_PROGRAM, item.size);
+                        W25Q_WaitForReady(hflash, timeout);
+                    }
+                    break;
+
+                case W25Q_CMD_ERASE_SECTOR:
+                    status = W25Q_EraseSector(hflash, item.address);
+                    break;
+
+                case W25Q_CMD_READ_ID:
+                    status = W25Q_ReadJEDECID(hflash,
+                                              (uint8_t *)item.buffer,
+                                              (uint16_t *)(item.buffer + sizeof(uint8_t)));
+                    break;
+
+                case W25Q_CMD_READ_STATUS:
+                    status = W25Q_ReadStatusRegister1(hflash, item.buffer);
+                    break;
+
+                default:
+                    status = W25Q_PARAM_ERR;
+                    break;
+                }
+
+                // Release the mutex
+                xSemaphoreGive(hflash->mutex);
+
+                // Set the status if requested
+                if (item.status != NULL)
+                {
+                    *item.status = status;
+                }
+
+                // Signal completion to the caller
+                if (item.completion_semaphore != NULL)
+                {
+                    xSemaphoreGive(item.completion_semaphore);
+                }
+            }
+        }
+    }
+}
+#endif
+#endif // W25QXX_USE_RTOS

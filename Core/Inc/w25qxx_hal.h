@@ -6,13 +6,19 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// Add FreeRTOS includes
+/* Configuration Options */
+/* Comment out any option not needed in your application */
+/* Note, the DMA and RTOS are not yet working well and need to FIX it */
+// #define W25QXX_USE_DMA /* Enable DMA functionality */
+// #define W25QXX_USE_RTOS   /* Enable FreeRTOS functionality */
+
+/* Include FreeRTOS headers only if RTOS is enabled */
+#ifdef W25QXX_USE_RTOS
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
 #include "semphr.h"
-
-// Define common HAL status codes for the W25QXX driver
+#endif
 typedef enum
 {
     W25Q_OK = 0x00U,
@@ -89,68 +95,73 @@ typedef struct W25Q_HandleTypeDef_s W25Q_HandleTypeDef;
 
 /**
  * @brief Configuration structure for the W25QXX flash.
- * This structure holds the hardware and chip-specific parameters.
  */
 typedef struct
 {
-    // Pointer to underlying SPI/QSPI peripheral handler (e.g., specific to STM32 HAL)
-    SPI_HandleTypeDef *spi_handle; // Explicitly using STM32's SPI_HandleTypeDef
-    // GPIO pin for Chip Select (CS) and its port
+    /* Base fields (always included) */
+    SPI_HandleTypeDef *spi_handle;
     GPIO_TypeDef *cs_port;
     uint16_t cs_pin;
 
-    // DMA-related members
-    uint8_t use_dma;           // Flag to enable/disable DMA mode
-    DMA_HandleTypeDef *hdmatx; // DMA handle for transmit
-    DMA_HandleTypeDef *hdmarx; // DMA handle for receive
-    
-    // Optional callback for DMA completion
-    void (*TxCpltCallback)(W25Q_HandleTypeDef *hflash);
-    void (*RxCpltCallback)(W25Q_HandleTypeDef *hflash);
-    void (*TxRxCpltCallback)(W25Q_HandleTypeDef *hflash);
-
-    // Flash chip specific parameters (can be overridden during init if known)
+    /* Flash chip specific parameters */
     uint32_t page_size;
     uint32_t sector_size;
     uint32_t block_32k_size;
     uint32_t block_64k_size;
-    uint32_t total_size_bytes; // Total flash memory size in bytes (e.g., 16*1024*1024 for 128Mbit)
+    uint32_t total_size_bytes;
+    uint8_t spi_mode;
 
-    // Optional: SPI/QSPI mode (future expansion)
-    uint8_t spi_mode; // 1: SPI, 4: QSPI, 8: OctoSPI
-    
-    // FreeRTOS support flag
+#ifdef W25QXX_USE_DMA
+    /* DMA-related members */
+    uint8_t use_dma;
+    DMA_HandleTypeDef *hdmatx;
+    DMA_HandleTypeDef *hdmarx;
+
+    /* Optional callback for DMA completion */
+    void (*TxCpltCallback)(W25Q_HandleTypeDef *hflash);
+    void (*RxCpltCallback)(W25Q_HandleTypeDef *hflash);
+    void (*TxRxCpltCallback)(W25Q_HandleTypeDef *hflash);
+#endif
+
+#ifdef W25QXX_USE_RTOS
+    /* FreeRTOS support flag */
     uint8_t use_rtos;
+#endif
 } W25Q_ConfigTypeDef;
 
 /**
  * @brief W25QXX Driver Handle structure.
- * This structure contains instance-specific data and configuration.
  */
 typedef struct W25Q_HandleTypeDef_s
 {
+    /* Base fields */
     W25Q_ConfigTypeDef config;
     uint8_t mfg_id;
     uint16_t dev_id;
-    
-    // State tracking for DMA operations
-    volatile uint8_t state;     // Current state (READY, BUSY_TX, BUSY_RX)
-    volatile uint8_t dma_error; // DMA error flag
+
+#ifdef W25QXX_USE_DMA
+    /* State tracking for DMA operations */
+    volatile uint8_t state;
+    volatile uint8_t dma_error;
     volatile uint8_t tx_complete;
     volatile uint8_t rx_complete;
-    
-    // FreeRTOS synchronization primitives
-    SemaphoreHandle_t mutex;           // Mutex for thread-safe access
-    SemaphoreHandle_t tx_semaphore;    // Binary semaphore for TX completion
-    SemaphoreHandle_t rx_semaphore;    // Binary semaphore for RX completion
-    SemaphoreHandle_t txrx_semaphore;  // Binary semaphore for TX/RX completion
-    
-    // FreeRTOS task and queue handles
+#endif
+
+#ifdef W25QXX_USE_RTOS
+    /* FreeRTOS synchronization primitives */
+    SemaphoreHandle_t mutex;
+    SemaphoreHandle_t tx_semaphore;
+    SemaphoreHandle_t rx_semaphore;
+    SemaphoreHandle_t txrx_semaphore;
+
+    /* FreeRTOS task and queue handles */
     TaskHandle_t task_handle;
     QueueHandle_t cmd_queue;
+#endif
 } W25Q_HandleTypeDef;
 
-// Command types for flash operations (for FreeRTOS queue)
+#ifdef W25QXX_USE_RTOS
+/* Command types for flash operations (for FreeRTOS queue) */
 typedef enum {
     W25Q_CMD_READ,
     W25Q_CMD_WRITE_PAGE,
@@ -159,155 +170,43 @@ typedef enum {
     W25Q_CMD_READ_STATUS
 } W25Q_CommandType;
 
-// Command structure for flash operations (for FreeRTOS queue)
+/* Command structure for flash operations (for FreeRTOS queue) */
 typedef struct {
     W25Q_CommandType cmd_type;
     uint32_t address;
     uint8_t *buffer;
     uint32_t size;
     W25Q_StatusTypeDef *status;
-    SemaphoreHandle_t completion_semaphore; // Caller's semaphore to signal completion
+    SemaphoreHandle_t completion_semaphore;
 } W25Q_QueueItem;
+#endif
 
-// --- Public Function Prototypes ---
+/* --- Base/Core API Functions --- */
 
-/**
- * @brief Initializes the W25QXX flash driver instance.
- * This function configures the SPI peripheral and verifies flash presence.
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @param pFlashConfig Pointer to the W25Q_ConfigTypeDef with initial hardware config.
- * @retval W25Q_StatusTypeDef Status of the initialization (W25Q_OK if successful)
- */
 W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hflash, const W25Q_ConfigTypeDef *pFlashConfig);
-
-/**
- * @brief Deinitializes the W25QXX flash driver instance.
- * Resets the SPI peripheral to its default state.
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @retval W25Q_StatusTypeDef Status of the deinitialization (W25Q_OK if successful)
- */
 W25Q_StatusTypeDef W25Q_DeInit(W25Q_HandleTypeDef *hflash);
-
-/**
- * @brief Reads the JEDEC ID (Manufacturer and Device ID) from the W25QXX flash.
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @param pManufacturerID Pointer to store the Manufacturer ID.
- * @param pDeviceID Pointer to store the Device ID.
- * @retval W25Q_StatusTypeDef Status of the operation.
- */
 W25Q_StatusTypeDef W25Q_ReadJEDECID(W25Q_HandleTypeDef *hflash, uint8_t *pManufacturerID, uint16_t *pDeviceID);
-
-/**
- * @brief Reads the Status Register 1 from the W25QXX flash.
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @param pStatusReg1 Pointer to store the Status Register 1 value.
- * @retval W25Q_StatusTypeDef Status of the operation.
- */
 W25Q_StatusTypeDef W25Q_ReadStatusRegister1(W25Q_HandleTypeDef *hflash, uint8_t *pStatusReg1);
-
-/**
- * @brief Reads the Status Register 2 from the W25QXX flash.
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @param pStatusReg2 Pointer to store the Status Register 2 value.
- * @retval W25Q_StatusTypeDef Status of the operation.
- */
 W25Q_StatusTypeDef W25Q_ReadStatusRegister2(W25Q_HandleTypeDef *hflash, uint8_t *pStatusReg2);
-
-/**
- * @brief Calculates the approximate timeout for a flash operation based on size.
- * This is a basic estimation and may need fine-tuning.
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @param operation_type W25Q_CMD_PAGE_PROGRAM, W25Q_CMD_SECTOR_ERASE_4KB, etc.
- * @param data_size Size of data for page program (in bytes) or 0 for erase.
- * @retval uint32_t Timeout value in milliseconds. Returns 0 if unknown operation.
- */
 uint32_t W25Q_CalculateTimeout(const W25Q_HandleTypeDef *hflash, uint8_t operation_type, uint32_t data_size);
-
-/**
- * @brief Reads data from the W25QXX flash at a specified address.
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @param Address The starting address to read from.
- * @param pBuffer Pointer to the buffer where read data will be stored.
- * @param Size Number of bytes to read.
- * @retval W25Q_StatusTypeDef Status of the operation.
- */
 W25Q_StatusTypeDef W25Q_Read(W25Q_HandleTypeDef *hflash, uint32_t Address, uint8_t *pBuffer, uint32_t Size);
-
-/**
- * @brief Writes data to a page in the W25QXX flash.
- * Note: Data must not exceed hflash->config.page_size.
- * The flash must be erased prior to writing.
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @param Address The starting address to write to (must be page aligned).
- * @param pBuffer Pointer to the data to be written.
- * @param Size Number of bytes to write (max hflash->config.page_size).
- * @retval W25Q_StatusTypeDef Status of the operation.
- */
 W25Q_StatusTypeDef W25Q_WritePage(W25Q_HandleTypeDef *hflash, uint32_t Address, const uint8_t *pBuffer, uint32_t Size);
-
-/**
- * @brief Erases a 4KB sector in the W25QXX flash.
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @param SectorAddress The starting address of the sector to erase (must be sector aligned).
- * @retval W25Q_StatusTypeDef Status of the operation.
- */
 W25Q_StatusTypeDef W25Q_EraseSector(W25Q_HandleTypeDef *hflash, uint32_t SectorAddress);
 
-// Public DMA function prototypes
+#ifdef W25QXX_USE_DMA
+/* --- DMA API Functions --- */
 W25Q_StatusTypeDef W25Q_Read_DMA(W25Q_HandleTypeDef *hflash, uint32_t Address, uint8_t *pBuffer, uint32_t Size);
 W25Q_StatusTypeDef W25Q_WritePage_DMA(W25Q_HandleTypeDef *hflash, uint32_t Address, const uint8_t *pBuffer, uint32_t Size);
 W25Q_StatusTypeDef W25Q_WaitForDMATransferComplete(W25Q_HandleTypeDef *hflash, uint32_t Timeout);
+#endif
 
-// FreeRTOS specific functions
-/**
- * @brief Starts the W25QXX flash task for handling operations in FreeRTOS environment
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @retval W25Q_StatusTypeDef Status of the operation.
- */
+#ifdef W25QXX_USE_RTOS
+/* RTOS-specific function prototypes */
 W25Q_StatusTypeDef W25Q_StartTask(W25Q_HandleTypeDef *hflash);
-
-/**
- * @brief Stops the W25QXX flash task
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @retval W25Q_StatusTypeDef Status of the operation.
- */
 W25Q_StatusTypeDef W25Q_StopTask(W25Q_HandleTypeDef *hflash);
-
-/**
- * @brief Thread-safe read operation using FreeRTOS
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @param Address The starting address to read from.
- * @param pBuffer Pointer to the buffer where read data will be stored.
- * @param Size Number of bytes to read.
- * @retval W25Q_StatusTypeDef Status of the operation.
- */
 W25Q_StatusTypeDef W25Q_Read_RTOS(W25Q_HandleTypeDef *hflash, uint32_t Address, uint8_t *pBuffer, uint32_t Size);
-
-/**
- * @brief Thread-safe page write operation using FreeRTOS
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @param Address The starting address to write to (must be page aligned).
- * @param pBuffer Pointer to the data to be written.
- * @param Size Number of bytes to write (max hflash->config.page_size).
- * @retval W25Q_StatusTypeDef Status of the operation.
- */
 W25Q_StatusTypeDef W25Q_WritePage_RTOS(W25Q_HandleTypeDef *hflash, uint32_t Address, const uint8_t *pBuffer, uint32_t Size);
-
-/**
- * @brief Thread-safe sector erase operation using FreeRTOS
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @param SectorAddress The starting address of the sector to erase (must be sector aligned).
- * @retval W25Q_StatusTypeDef Status of the operation.
- */
 W25Q_StatusTypeDef W25Q_EraseSector_RTOS(W25Q_HandleTypeDef *hflash, uint32_t SectorAddress);
-
-/**
- * @brief Thread-safe JEDEC ID read operation using FreeRTOS
- * @param hflash Pointer to the W25Q_HandleTypeDef structure.
- * @param pManufacturerID Pointer to store the Manufacturer ID.
- * @param pDeviceID Pointer to store the Device ID.
- * @retval W25Q_StatusTypeDef Status of the operation.
- */
 W25Q_StatusTypeDef W25Q_ReadJEDECID_RTOS(W25Q_HandleTypeDef *hflash, uint8_t *pManufacturerID, uint16_t *pDeviceID);
-
+#endif
 #endif // W25QXX_HAL_H
