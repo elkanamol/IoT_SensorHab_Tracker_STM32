@@ -48,19 +48,25 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
-    Core/Src/uat_freertos.c
-    Core/Src/uat_parser.c
-    Core/Src/rc76xx_mqtt.c
-    Core/Src/bme280_porting.c
-    Core/Src/bme280.c
+    Drivers/uAT/Src/uat_freertos.c
+    Drivers/uAT/Src/uat_parser.c
+    Drivers/uAT/Src/rc76xx_mqtt.c
+    Drivers/BME280/Src/bme280_porting.c
+    Drivers/BME280/Src/bme280.c
     Core/Src/w25qxx_hal.c
+    Drivers/w25qxx/Src/driver_w25qxx_interface.c
+    Drivers/w25qxx/Src/driver_w25qxx.c
+    Drivers/w25qxx/Src/driver_w25qxx_advance.c
+    Drivers/w25qxx/Src/driver_w25qxx_basic.c
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     Core/Inc
-
+    Drivers/uAT/Inc
+    Drivers/BME280/Inc
+    Drivers/w25qxx/Inc
 )
 
 # Add project symbols (macros)

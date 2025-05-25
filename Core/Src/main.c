@@ -38,6 +38,8 @@
 #include "bme280_porting.h"
 
 #include "w25qxx_hal.h"
+#include "driver_w25qxx_interface.h"
+#include "driver_w25qxx_basic.h"
 
 /* USER CODE END Includes */
 
@@ -48,6 +50,12 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+// W25Q64 specific parameters
+#define W25Q64_SECTOR_SIZE      4096        // 4KB sectors
+#define W25Q64_PAGE_SIZE        256         // 256 byte pages
+#define W25Q64_TOTAL_SIZE       8388608     // 8MB total (8 * 1024 * 1024)
+#define W25Q64_BLOCK_SIZE       65536       // 64KB blocks
+#define DATA_START_ADDRESS      0x1000      // Start logging at 4KB offset (after test area)
 
 /* USER CODE END PD */
 
@@ -62,7 +70,6 @@
 extern UART_HandleTypeDef huart2;
 extern I2C_HandleTypeDef hi2c1;
 extern SPI_HandleTypeDef hspi1;
-static W25Q_HandleTypeDef hflash;
 static RC76XX_Handle_t mqttHandle;
 struct bme280_dev bme_device;
 struct bme280_data bme_comp_data;
@@ -76,10 +83,10 @@ typedef struct
   float humidity;     // Humidity in %
 } BME280_Record_t;
 
-// Add this to your private variables section
-#define MAX_RECORDS_IN_SECTOR (W25Q_DEFAULT_SECTOR_SIZE / sizeof(BME280_Record_t))
+// W25Q64 specific variables
+#define RECORDS_PER_SECTOR (W25Q64_SECTOR_SIZE / sizeof(BME280_Record_t))
 static BME280_Record_t lastReadRecord;
-static uint32_t nextWriteAddress = 0;
+static uint32_t nextWriteAddress = DATA_START_ADDRESS;
 static SemaphoreHandle_t bme280DataMutex = NULL;
 
 /* USER CODE END PV */
@@ -93,66 +100,76 @@ static void MQTT_Task(void *pvParameters);
 void StartBme280Task(void *argument);
 void StartW25QTestTask(void *argument);
 void StartDataLoggerTask(void *argument);
-static W25Q_StatusTypeDef W25Q_Flash_Init(void);
+// static W25Q_StatusTypeDef W25Q_Flash_Init(void);
 void PrintBufferHex(const uint8_t *buffer, uint32_t size, uint32_t baseAddress);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-// Initialize W25Q Flash
-static W25Q_StatusTypeDef W25Q_Flash_Init(void)
+
+// W25Q64 utility functions
+uint32_t W25Q64_GetSectorAddress(uint32_t address)
 {
-  W25Q_ConfigTypeDef flashConfig;
-  W25Q_StatusTypeDef status;
-  uint8_t mfgID;
-  uint16_t devID;
-
-  // Configure the flash
-  flashConfig.spi_handle = &hspi1;
-  flashConfig.cs_port = SPI1_CS_GPIO_Port;
-  flashConfig.cs_pin = SPI1_CS_Pin;
-#ifdef W25QXX_USE_DMA
-  // DMA configuration (if used)
-  flashConfig.use_dma = 1; // Set to 1 to use DMA
-  flashConfig.hdmatx = hspi1.hdmatx;
-  flashConfig.hdmarx = hspi1.hdmarx;
-
-  // Optional callbacks
-  flashConfig.TxCpltCallback = HAL_SPI_TxCpltCallback;
-  flashConfig.RxCpltCallback = HAL_SPI_RxCpltCallback;
-  flashConfig.TxRxCpltCallback = HAL_SPI_TxRxCpltCallback;
-#endif
-  // Flash parameters (can use defaults)
-  flashConfig.page_size = W25Q_DEFAULT_PAGE_SIZE;
-  flashConfig.sector_size = W25Q_DEFAULT_SECTOR_SIZE;
-  flashConfig.block_32k_size = W25Q_DEFAULT_BLOCK32_SIZE;
-  flashConfig.block_64k_size = W25Q_DEFAULT_BLOCK64_SIZE;
-  flashConfig.total_size_bytes = 8 * 1024 * 1024; // 8MB for W25Q64
-
-  // SPI mode
-  flashConfig.spi_mode = 1; // 1 for standard SPI
-
-#ifdef W25QXX_USE_RTOS
-  // IMPORTANT FIX: Initialize without RTOS first, then enable RTOS later
-  flashConfig.use_rtos = 0; // First initialize without RTOS
-#endif
-  // Initialize the flash without RTOS support
-  status = W25Q_Init(&hflash, &flashConfig);
-  if (status != W25Q_OK)
-  {
-    printf("W25Q Flash initialization failed with error: %d\r\n", status);
-    return status;
-  }
-  status = W25Q_ReadJEDECID(&hflash, &mfgID, &devID);
-  if (status != W25Q_OK)
-  {
-    printf("Failed to read W25Q Flash JEDEC ID: %d\r\n", status);
-    return status;
-  }
-  printf("W25Q Flash detected: Manufacturer ID: 0x%02X, Device ID: 0x%04X\r\n", mfgID, devID);
-
-  return W25Q_OK;
+    return (address / W25Q64_SECTOR_SIZE) * W25Q64_SECTOR_SIZE;
 }
+
+uint32_t W25Q64_GetSectorNumber(uint32_t address)
+{
+    return address / W25Q64_SECTOR_SIZE;
+}
+
+uint32_t W25Q64_GetRecordsInSector(uint32_t sector_start_address)
+{
+    BME280_Record_t tempRecord;
+    uint32_t record_count = 0;
+    
+    for (uint32_t addr = sector_start_address; 
+         addr < (sector_start_address + W25Q64_SECTOR_SIZE); 
+         addr += sizeof(BME280_Record_t))
+    {
+        if (w25qxx_basic_read(addr, (uint8_t *)&tempRecord, sizeof(BME280_Record_t)) == 0)
+        {
+            if (tempRecord.timestamp != 0xFFFFFFFF)
+            {
+                record_count++;
+            }
+            else
+            {
+                break; // Found empty record, stop counting
+            }
+        }
+        else
+        {
+            break; // Read error, stop counting
+        }
+    }
+    
+    return record_count;
+}
+
+void W25Q64_PrintSectorInfo(uint32_t sector_address)
+{
+    uint32_t sector_num = W25Q64_GetSectorNumber(sector_address);
+    uint32_t records_used = W25Q64_GetRecordsInSector(sector_address);
+    
+    printf("Sector %lu (0x%08lX): %lu/%d records used\r\n", 
+           sector_num, sector_address, records_used, RECORDS_PER_SECTOR);
+}
+
+void W25Q64_PrintFlashInfo(void)
+{
+    printf("\r\n=== W25Q64 Flash Information ===\r\n");
+    printf("Total Size: %d bytes (%.1f MB)\r\n", W25Q64_TOTAL_SIZE, W25Q64_TOTAL_SIZE / 1024.0f / 1024.0f);
+    printf("Sector Size: %d bytes (%d KB)\r\n", W25Q64_SECTOR_SIZE, W25Q64_SECTOR_SIZE / 1024);
+    printf("Page Size: %d bytes\r\n", W25Q64_PAGE_SIZE);
+    printf("Total Sectors: %d\r\n", W25Q64_TOTAL_SIZE / W25Q64_SECTOR_SIZE);
+    printf("BME280 Record Size: %d bytes\r\n", sizeof(BME280_Record_t));
+    printf("Records per Sector: %d\r\n", RECORDS_PER_SECTOR);
+    printf("Total Records Capacity: %d\r\n", (W25Q64_TOTAL_SIZE - DATA_START_ADDRESS) / sizeof(BME280_Record_t));
+    printf("Data Start Address: 0x%08X\r\n", DATA_START_ADDRESS);
+    printf("================================\r\n\r\n");
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -204,13 +221,23 @@ int main(void)
   /* Init scheduler */
   osKernelInitialize();
   // MX_FREERTOS_Init();
+  bme280DataMutex = xSemaphoreCreateMutex();
+  if (bme280DataMutex == NULL)
+  {
+    printf("Failed to create BME280 data mutex\r\n");
+    Error_Handler();
+  }
+  BaseType_t TaskStatus;
   // Create the uAT parser task
-  xTaskCreate(uAT_Task,
-              "uAT_Task",
-              512, // stack depth in words
-              NULL,
-              tskIDLE_PRIORITY + 1,
-              NULL);
+
+  TaskStatus = xTaskCreate(uAT_Task,
+                           "uAT_Task",
+                           512, // stack depth in words
+                           NULL,
+                           tskIDLE_PRIORITY + 1,
+                           NULL);
+  configASSERT(TaskStatus == pdPASS);
+  printf("uAT task created\n");
 
   // // (Optional) your other application tasks
   // xTaskCreate(App_Task,
@@ -220,28 +247,35 @@ int main(void)
   //             tskIDLE_PRIORITY + 1,
   //             NULL);
 
-  xTaskCreate(MQTT_Task,
-              "MQTT_Task",
-              512 * 2,
-              NULL,
-              tskIDLE_PRIORITY + 1,
-              NULL);
+  TaskStatus = xTaskCreate(MQTT_Task,
+                           "MQTT_Task",
+                           512 * 2,
+                           NULL,
+                           tskIDLE_PRIORITY + 1,
+                           NULL);
+  configASSERT(TaskStatus == pdPASS);
+  printf("MQTT task created\n");
 
   // Create the BME280 task
-  xTaskCreate(StartBme280Task,
-              "BME280_Task",
-              512, // Adjust stack size as needed
-              NULL,
-              tskIDLE_PRIORITY + 1,
-              NULL);
+  TaskStatus = xTaskCreate(StartBme280Task,
+                           "BME280_Task",
+                           512, // Adjust stack size as needed
+                           NULL,
+                           tskIDLE_PRIORITY + 1,
+                           NULL);
+  configASSERT(TaskStatus == pdPASS);
+  printf("BME280 task created\n");
 
   // Create the Data Logger task
-  xTaskCreate(StartDataLoggerTask,
-              "DataLogger",
-              512 * 2, // Larger stack for this task
-              NULL,
-              tskIDLE_PRIORITY + 1,
-              NULL);
+  TaskStatus = xTaskCreate(StartDataLoggerTask,
+                           "DataLogger",
+                           2048, // Larger stack for this task
+                           NULL,
+                           tskIDLE_PRIORITY + 1,
+                           NULL);
+  configASSERT(TaskStatus == pdPASS);
+  printf("DataLogger task created\n");
+
   /* USER CODE END 2 */
 
   // /* Init scheduler */
@@ -658,278 +692,298 @@ void StartBme280Task(void *argument)
   }
 }
 
-void StartW25QTestTask(void *argument)
-{
-  (void)argument;
-  uint8_t testData[256];
-  uint8_t readData[256];
-  W25Q_StatusTypeDef status;
 
-  // Initialize test data
-  for (int i = 0; i < 256; i++)
-  {
-    testData[i] = i;
-  }
-
-  // Wait a bit for other initializations to complete
-  vTaskDelay(pdMS_TO_TICKS(1000));
-
-  printf("W25Q Flash test starting...\r\n");
-
-  // Erase a sector at address 0
-  printf("Erasing sector at address 0...\r\n");
-  status = W25Q_EraseSector_RTOS(&hflash, 0);
-  if (status != W25Q_OK)
-  {
-    printf("Sector erase failed: %d\r\n", status);
-    vTaskDelete(NULL);
-    return;
-  }
-
-  // Write test data to the first page
-  printf("Writing test data to first page...\r\n");
-  status = W25Q_WritePage_RTOS(&hflash, 0, testData, 256);
-  if (status != W25Q_OK)
-  {
-    printf("Page write failed: %d\r\n", status);
-    vTaskDelete(NULL);
-    return;
-  }
-
-  // Read back the data
-  printf("Reading data back...\r\n");
-  status = W25Q_Read_RTOS(&hflash, 0, readData, 256);
-  if (status != W25Q_OK)
-  {
-    printf("Read failed: %d\r\n", status);
-    vTaskDelete(NULL);
-    return;
-  }
-
-  // Verify the data
-  bool dataMatch = true;
-  for (int i = 0; i < 256; i++)
-  {
-    if (readData[i] != testData[i])
-    {
-      printf("Data mismatch at index %d: expected %d, got %d\r\n", i, testData[i], readData[i]);
-      dataMatch = false;
-      break;
-    }
-  }
-
-  if (dataMatch)
-  {
-    printf("W25Q Flash test passed! Data verified correctly.\r\n");
-  }
-  else
-  {
-    printf("W25Q Flash test failed! Data verification error.\r\n");
-  }
-
-  // Periodic status check
-  for (;;)
-  {
-    uint8_t statusReg;
-    W25Q_ReadStatusRegister1(&hflash, &statusReg);
-    printf("W25Q Flash status: 0x%02X\r\n", statusReg);
-    vTaskDelay(pdMS_TO_TICKS(5000)); // Check every 5 seconds
-  }
-}
-
-// Add this function implementation to your code
 void StartDataLoggerTask(void *argument)
 {
-  (void)argument;
-  W25Q_StatusTypeDef flash_status;
-  BME280_Record_t record;
-  uint32_t lastReadAddress = 0;
-
-  // Wait for other tasks to initialize
-  vTaskDelay(pdMS_TO_TICKS(1000));
-
-  printf("Data Logger Task starting...\r\n");
-
-  // Create mutex for accessing BME280 data if it doesn't exist yet
-  if (bme280DataMutex == NULL)
-  {
-    bme280DataMutex = xSemaphoreCreateMutex();
+    (void)argument;
+    uint8_t flash_status;
+    uint8_t manufacturer;
+    uint8_t device_id;
+    BME280_Record_t record;
+    uint32_t lastReadAddress = 0;
+    
+    // Delay for system init
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    printf("Data Logger Task starting...\r\n");
+    
+    // Create mutex for accessing BME280 data if it doesn't exist yet
     if (bme280DataMutex == NULL)
     {
-      printf("Failed to create BME280 data mutex\r\n");
-      vTaskDelete(NULL);
-      return;
-    }
-  }
-
-  // 1. Initialize the W25Q Flash - using the non-RTOS version
-  if (W25Q_Flash_Init() != W25Q_OK)
-  {
-    printf("Failed to initialize W25Q Flash\r\n");
-    vTaskDelete(NULL);
-    return;
-  }
-  printf("W25Q Flash initialized successfully\r\n");
-
-  // Erase the first sector to prepare for data storage - using non-RTOS version
-  printf("Erasing first sector...\r\n");
-  flash_status = W25Q_EraseSector(&hflash, 0);
-  if (flash_status != W25Q_OK)
-  {
-    printf("Failed to erase first sector: %d\r\n", flash_status);
-    vTaskDelete(NULL);
-    return;
-  }
-  printf("First sector erased successfully\r\n");
-
-  // Find the next write address by scanning the first sector
-  // This allows resuming after power cycles
-  nextWriteAddress = 0;
-  BME280_Record_t tempRecord;
-
-  for (uint32_t addr = 0; addr < W25Q_DEFAULT_SECTOR_SIZE; addr += sizeof(BME280_Record_t))
-  {
-    flash_status = W25Q_Read(&hflash, addr, (uint8_t *)&tempRecord, sizeof(BME280_Record_t));
-    if (flash_status != W25Q_OK)
-    {
-      printf("Error reading flash at address 0x%08lX: %d\r\n", addr, flash_status);
-      break;
-    }
-
-    // If we find an empty record (timestamp is 0xFFFFFFFF when erased), we've found our write position
-    if (tempRecord.timestamp == 0xFFFFFFFF)
-    {
-      nextWriteAddress = addr;
-      break;
-    }
-
-    // Keep track of the last valid record we've read
-    lastReadAddress = addr;
-  }
-
-  printf("Next write address: 0x%08lX\r\n", nextWriteAddress);
-
-  // If we found existing records, read the last one
-  if (lastReadAddress > 0)
-  {
-    flash_status = W25Q_Read(&hflash, lastReadAddress, (uint8_t *)&lastReadRecord, sizeof(BME280_Record_t));
-    if (flash_status == W25Q_OK)
-    {
-      printf("Last record found - Time: %lu ms, Temp: %.2f°C, Press: %.2f hPa, Hum: %.2f%%\r\n",
-             lastReadRecord.timestamp, lastReadRecord.temperature,
-             lastReadRecord.pressure, lastReadRecord.humidity);
-    }
-  }
-
-  // Main task loop
-  for (;;)
-  {
-    // 2. Get BME280 values (using mutex for thread safety)
-    if (xSemaphoreTake(bme280DataMutex, pdMS_TO_TICKS(100)) == pdTRUE)
-    {
-      // Convert the BME280 data to our record format
-      bme_calc_data_int_t bme_calc_data;
-      convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
-
-      record.timestamp = HAL_GetTick();
-      record.temperature = (float)bme_calc_data.temp_whole + (float)bme_calc_data.temp_frac / 100.0f;
-      record.pressure = (float)bme_calc_data.press_whole + (float)bme_calc_data.press_frac / 100.0f;
-      record.humidity = (float)bme_calc_data.hum_whole + (float)bme_calc_data.hum_frac / 100.0f;
-
-      // Release the mutex as soon as we've copied the data
-      xSemaphoreGive(bme280DataMutex);
-
-      // 3. Write to flash (only if we have space in the first sector)
-      if (nextWriteAddress < W25Q_DEFAULT_SECTOR_SIZE)
-      {
-        printf("Writing record to flash at address 0x%08lX\r\n", nextWriteAddress);
-
-        // Write the record to flash using non-RTOS version
-        flash_status = W25Q_WritePage(&hflash, nextWriteAddress,
-                                      (uint8_t *)&record, sizeof(BME280_Record_t));
-
-        if (flash_status == W25Q_OK)
+        bme280DataMutex = xSemaphoreCreateMutex();
+        if (bme280DataMutex == NULL)
         {
-          // 4. Read back the written data to verify
-          flash_status = W25Q_Read(&hflash, nextWriteAddress,
-                                   (uint8_t *)&lastReadRecord, sizeof(BME280_Record_t));
-
-          if (flash_status == W25Q_OK)
-          {
-            // 5. Print the read data in both formatted and hex formats
-            printf("Record written and read back - Time: %lu ms, Temp: %.2f°C, Press: %.2f hPa, Hum: %.2f%%\r\n",
-                   lastReadRecord.timestamp, lastReadRecord.temperature,
-                   lastReadRecord.pressure, lastReadRecord.humidity);
-            // Print the raw bytes of the record in hex format
-            PrintBufferHex((uint8_t *)&lastReadRecord, sizeof(BME280_Record_t), nextWriteAddress);
-
-            // Update next write address
-            nextWriteAddress += sizeof(BME280_Record_t);
-
-            // If we've reached the end of the sector, wrap around
-            if (nextWriteAddress >= W25Q_DEFAULT_SECTOR_SIZE)
-            {
-              printf("First sector full, will erase and start over on next cycle\r\n");
-
-              // Erase the sector for the next cycle
-              flash_status = W25Q_EraseSector(&hflash, 0);
-              if (flash_status == W25Q_OK)
-              {
-                nextWriteAddress = 0;
-                printf("First sector erased for reuse\r\n");
-              }
-              else
-              {
-                printf("Failed to erase first sector: %d\r\n", flash_status);
-              }
-            }
-          }
-          else
-          {
-            printf("Failed to read back record: %d\r\n", flash_status);
-          }
+            printf("Failed to create BME280 data mutex\r\n");
+            vTaskDelete(NULL);
+            return;
+        }
+    }
+    
+    // Initialize W25Q64 flash using basic driver
+    printf("Initializing W25Q64 flash...\r\n");
+    flash_status = w25qxx_basic_init(W25Q64, W25QXX_INTERFACE_SPI, W25QXX_BOOL_FALSE);
+    if (flash_status != 0)
+    {
+        printf("Failed to initialize W25Q64 flash (err=%d)\r\n", flash_status);
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    printf("W25Q64 flash initialized successfully\r\n");
+    
+    // Get manufacturer and device ID
+    flash_status = w25qxx_basic_get_id(&manufacturer, &device_id);
+    if (flash_status == 0)
+    {
+        printf("W25Q64: manufacturer is 0x%02X device id is 0x%02X\r\n", manufacturer, device_id);
+        // Expected values for W25Q64: manufacturer = 0xEF, device_id = 0x16
+        if (manufacturer == 0xEF && device_id == 0x16)
+        {
+            printf("W25Q64 chip confirmed!\r\n");
         }
         else
         {
-          printf("Failed to write record: %d\r\n", flash_status);
+            printf("Warning: Unexpected chip ID (expected 0xEF 0x16)\r\n");
         }
-      }
-      else
-      {
-        printf("First sector full, reading and printing sector before erasing...\r\n");
-
-        // Read and print the entire sector
-        PrintBufferHex((uint8_t *)&lastReadRecord, sizeof(BME280_Record_t), nextWriteAddress);
-
-        flash_status = W25Q_EraseSector(&hflash, 0);
-        if (flash_status == W25Q_OK)
-        {
-          nextWriteAddress = 0;
-          printf("First sector erased for reuse\r\n");
-        }
-        else
-        {
-          printf("Failed to erase first sector: %d\r\n", flash_status);
-        }
-      }
-
-      // Every 5 cycles, read and print the sector contents
-      static uint8_t cycleCount = 0;
-      if (++cycleCount >= 5)
-      {
-        cycleCount = 0;
-        printf("Periodic sector read:\r\n");
-        PrintBufferHex((uint8_t *)&lastReadRecord, sizeof(BME280_Record_t), nextWriteAddress);
-      }
     }
     else
     {
-      printf("Failed to acquire BME280 data mutex\r\n");
+        printf("Failed to read manufacturer/device ID\r\n");
     }
-
-    // Wait before next logging cycle (e.g., log every 10 seconds)
-    vTaskDelay(pdMS_TO_TICKS(1000));
-  }
+    
+    // Print flash information
+    W25Q64_PrintFlashInfo();
+    
+    // Test basic write/read functionality
+    uint8_t test_data[8] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+    uint8_t read_data[8] = {0};
+    
+    printf("Testing W25Q64 write/read at address 0x00000000...\r\n");
+    flash_status = w25qxx_basic_write(0x00000000, test_data, 8);
+    if (flash_status == 0)
+    {
+        printf("Test write successful\r\n");
+        
+        flash_status = w25qxx_basic_read(0x00000000, read_data, 8);
+        if (flash_status == 0)
+        {
+            printf("Test read successful: ");
+            for (int i = 0; i < 8; i++)
+            {
+                printf("0x%02X ", read_data[i]);
+            }
+            printf("\r\n");
+            
+            // Verify data
+            bool data_match = true;
+            for (int i = 0; i < 8; i++)
+            {
+                if (test_data[i] != read_data[i])
+                {
+                    data_match = false;
+                    break;
+                }
+            }
+            
+            if (data_match)
+            {
+                printf("W25Q64 test PASSED - data verified correctly\r\n");
+            }
+            else
+            {
+                printf("W25Q64 test FAILED - data mismatch\r\n");
+            }
+        }
+        else
+        {
+            printf("Test read failed (err=%d)\r\n", flash_status);
+        }
+    }
+    else
+    {
+        printf("Test write failed (err=%d)\r\n", flash_status);
+    }
+    
+    // Find next write address by scanning for empty records
+    nextWriteAddress = DATA_START_ADDRESS;
+    BME280_Record_t tempRecord;
+    uint32_t current_sector_start = W25Q64_GetSectorAddress(DATA_START_ADDRESS);
+    
+    printf("Scanning for next write address starting at 0x%08X...\r\n", DATA_START_ADDRESS);
+    
+    // Scan multiple sectors to find the last written record
+    bool found_empty = false;
+    uint32_t max_scan_address = DATA_START_ADDRESS + (10 * W25Q64_SECTOR_SIZE); // Scan first 10 sectors
+    if (max_scan_address > W25Q64_TOTAL_SIZE)
+    {
+        max_scan_address = W25Q64_TOTAL_SIZE;
+    }
+    
+    for (uint32_t addr = DATA_START_ADDRESS; addr < max_scan_address; addr += sizeof(BME280_Record_t))
+    {
+        flash_status = w25qxx_basic_read(addr, (uint8_t *)&tempRecord, sizeof(BME280_Record_t));
+          if (flash_status != 0)
+        {
+            printf("Error reading flash at address 0x%08lX\r\n", addr);
+            break;
+        }
+        
+        // If we find an empty record (timestamp is 0xFFFFFFFF when erased), we've found our write position
+        if (tempRecord.timestamp == 0xFFFFFFFF)
+        {
+            nextWriteAddress = addr;
+            found_empty = true;
+            break;
+        }
+        
+        // Keep track of the last valid record we've read
+        lastReadAddress = addr;
+    }
+    
+    if (!found_empty)
+    {
+        printf("No empty space found in scanned area, starting at end of scan\r\n");
+        nextWriteAddress = max_scan_address;
+    }
+    
+    current_sector_start = W25Q64_GetSectorAddress(nextWriteAddress);
+    uint32_t records_in_current_sector = (nextWriteAddress - current_sector_start) / sizeof(BME280_Record_t);
+    
+    printf("Next write address: 0x%08lX\r\n", nextWriteAddress);
+    printf("Current sector start: 0x%08lX\r\n", current_sector_start);
+    printf("Records in current sector: %lu/%d\r\n", records_in_current_sector, RECORDS_PER_SECTOR);
+    
+    // Print current sector information
+    W25Q64_PrintSectorInfo(current_sector_start);
+    
+    // If we found existing records, read and display the last one
+    if (lastReadAddress >= DATA_START_ADDRESS)
+    {
+        flash_status = w25qxx_basic_read(lastReadAddress, (uint8_t *)&lastReadRecord, sizeof(BME280_Record_t));
+        if (flash_status == 0)
+        {
+            printf("Last record found at 0x%08lX:\r\n", lastReadAddress);
+            printf("  Time: %lu ms, Temp: %.2f°C, Press: %.2f hPa, Hum: %.2f%%\r\n",
+                   lastReadRecord.timestamp, lastReadRecord.temperature,
+                   lastReadRecord.pressure, lastReadRecord.humidity);
+        }
+    }
+    else
+    {
+        printf("No existing records found, starting fresh\r\n");
+    }
+    
+    // Main data logging loop
+    uint32_t log_counter = 0;
+    uint32_t total_records_written = 0;
+    
+    printf("\r\n=== Starting Data Logging Loop ===\r\n");
+    
+    for (;;)
+    {
+        if (xSemaphoreTake(bme280DataMutex, pdMS_TO_TICKS(100)) == pdTRUE)
+        {
+            // Prepare record from BME280 data
+            bme_calc_data_int_t bme_calc_data;
+            convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
+            
+            record.timestamp = HAL_GetTick();
+            record.temperature = (float)bme_calc_data.temp_whole + (float)bme_calc_data.temp_frac / 100.0f;
+            record.pressure = (float)bme_calc_data.press_whole + (float)bme_calc_data.press_frac / 100.0f;
+            record.humidity = (float)bme_calc_data.hum_whole + (float)bme_calc_data.hum_frac / 100.0f;
+            
+            xSemaphoreGive(bme280DataMutex);
+            
+            // Check if current sector is full
+            if (records_in_current_sector >= RECORDS_PER_SECTOR)
+            {
+                printf("\r\n--- Current sector full, moving to next sector ---\r\n");
+                W25Q64_PrintSectorInfo(current_sector_start);
+                
+                current_sector_start += W25Q64_SECTOR_SIZE;
+                nextWriteAddress = current_sector_start;
+                records_in_current_sector = 0;
+                
+                // Check if we've reached the end of flash
+                if (current_sector_start >= W25Q64_TOTAL_SIZE)
+                {
+                    printf("Flash memory full! Wrapping around to beginning...\r\n");
+                    current_sector_start = DATA_START_ADDRESS;
+                    nextWriteAddress = current_sector_start;
+                    
+                    // Optionally erase the chip here if you want to start fresh
+                    // printf("Erasing entire chip...\r\n");
+                    // w25qxx_basic_chip_erase();
+                    // printf("Chip erased, starting fresh\r\n");
+                    
+                    printf("Warning: Overwriting old data\r\n");
+                }
+                
+                printf("New sector: 0x%08lX\r\n", current_sector_start);
+            }
+            
+            // Write record to flash
+            log_counter++;
+            printf("[%lu] Writing record to 0x%08lX (sector %lu, record %lu/%d)\r\n", 
+                   log_counter, nextWriteAddress, 
+                   W25Q64_GetSectorNumber(nextWriteAddress),
+                   records_in_current_sector + 1, RECORDS_PER_SECTOR);
+            
+            flash_status = w25qxx_basic_write(nextWriteAddress, (uint8_t *)&record, sizeof(BME280_Record_t));
+            if (flash_status == 0)
+            {
+                // Read back to verify
+                flash_status = w25qxx_basic_read(nextWriteAddress, (uint8_t *)&lastReadRecord, sizeof(BME280_Record_t));
+                if (flash_status == 0)
+                {
+                    printf("  ✓ Verified: T=%.2f°C, P=%.2f hPa, H=%.2f%%, Time=%lu ms\r\n",
+                           lastReadRecord.temperature, lastReadRecord.pressure,
+                           lastReadRecord.humidity, lastReadRecord.timestamp);
+                    
+                    // Print hex dump every 10th record for debugging
+                    if (log_counter % 10 == 0)
+                    {
+                        printf("  Hex dump of record %lu:\r\n", log_counter);
+                        PrintBufferHex((uint8_t *)&lastReadRecord, sizeof(BME280_Record_t), nextWriteAddress);
+                    }
+                    
+                    nextWriteAddress += sizeof(BME280_Record_t);
+                    records_in_current_sector++;
+                    total_records_written++;
+                    
+                    // Print progress every 20 records
+                    if (log_counter % 20 == 0)
+                    {
+                        printf("\r\n--- Progress Report ---\r\n");
+                        printf("Total records written: %lu\r\n", total_records_written);
+                        printf("Current sector progress: %lu/%d records\r\n", 
+                               records_in_current_sector, RECORDS_PER_SECTOR);
+                        printf("Flash usage: %d%% of total capacity\r\n",
+                              (nextWriteAddress - DATA_START_ADDRESS) * 100 / (W25Q64_TOTAL_SIZE - DATA_START_ADDRESS));
+                        printf("----------------------\r\n\r\n");
+                    }
+                }
+                else
+                {
+                    printf("  ✗ Failed to read back record (err=%d)\r\n", flash_status);
+                }
+            }
+            else
+            {
+                printf("  ✗ Failed to write record to flash (err=%d)\r\n", flash_status);
+            }
+        }
+        else
+        {
+            printf("Failed to acquire BME280 data mutex\r\n");
+        }
+        
+        // Wait before next logging cycle
+        vTaskDelay(pdMS_TO_TICKS(10000)); // Log every 10 seconds
+    }
+    
+    // Cleanup (this won't be reached in the infinite loop)
+    printf("Cleaning up W25Q64 driver...\r\n");
+    w25qxx_basic_deinit();
 }
 
 // Function to print a buffer in hex format
@@ -986,7 +1040,6 @@ void PrintBufferHex(const uint8_t *buffer, uint32_t size, uint32_t baseAddress)
 
   printf("--- End of Buffer Hex Dump ---\r\n");
 }
-
 /* USER CODE END 4 */
 
 /**
