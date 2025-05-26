@@ -3,19 +3,76 @@
 #include "spi.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
 #include <stdarg.h>
 #include <stdio.h>
 
 extern SPI_HandleTypeDef hspi1;
 
+// FreeRTOS synchronization objects (to be defined in main.c)
+TaskHandle_t xW25QxxTaskHandle = NULL;
+SemaphoreHandle_t xSpiMutex = NULL;
+
+//------------------------------------------------------------------------------
+// Private helper functions
+//------------------------------------------------------------------------------
+
+/**
+ * @brief Wait for DMA completion using FreeRTOS task notification
+ * @return HAL status code
+ */
+static HAL_StatusTypeDef w25qxx_wait_for_dma_completion(void)
+{
+    // Store current task handle if not already stored
+    if (xW25QxxTaskHandle == NULL) {
+        xW25QxxTaskHandle = xTaskGetCurrentTaskHandle();
+    }
+    
+    // Wait for the notification from the SPI DMA completion ISR
+    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(W25QXX_DMA_TIMEOUT_MS)) == 0) {
+        // Timeout occurred
+        w25qxx_interface_debug_print("W25QXX SPI DMA Timeout!\n");
+        HAL_SPI_DMAStop(&hspi1);
+        return HAL_TIMEOUT;
+    }
+    
+    // Check for any HAL errors that might have occurred during DMA transfer
+    if (hspi1.ErrorCode != HAL_SPI_ERROR_NONE) {
+        w25qxx_interface_debug_print("W25QXX SPI DMA Error: 0x%lx\n", hspi1.ErrorCode);
+        return HAL_ERROR;
+    }
+    
+    return HAL_OK;
+}
+
+//------------------------------------------------------------------------------
+// Interface implementation
+//------------------------------------------------------------------------------
+
 uint8_t w25qxx_interface_spi_qspi_init(void)
 {
+    /* Create mutex for SPI access if not already created */
+    if (xSpiMutex == NULL) {
+        xSpiMutex = xSemaphoreCreateMutex();
+        if (xSpiMutex == NULL) {
+            return 1; /* Failed to create mutex */
+        }
+    }
+    
+    /* set cs high to release spi */
     W25QXX_CS_HIGH();
     return 0;
 }
 
 uint8_t w25qxx_interface_spi_qspi_deinit(void)
 {
+    /* Delete mutex if it exists */
+    if (xSpiMutex != NULL) {
+        vSemaphoreDelete(xSpiMutex);
+        xSpiMutex = NULL;
+    }
+    
+    /* set cs high to release spi */
     W25QXX_CS_HIGH();
     return 0;
 }
@@ -30,13 +87,20 @@ uint8_t w25qxx_interface_spi_qspi_write_read(uint8_t instruction, uint8_t instru
     {
         return 1;
     }
-    
+    /* spi write read, calling DMA-enabled spi_write_read implementation*/
     return spi_write_read(in_buf, in_len, out_buf, out_len);
 }
 
 uint8_t spi_write_read(uint8_t *in_buf, uint32_t in_len, uint8_t *out_buf, uint32_t out_len)
 {
-    uint8_t res;
+    HAL_StatusTypeDef hal_status;
+    
+    // Acquire mutex if SPI peripheral is shared by multiple tasks
+    if (xSpiMutex != NULL) {
+        if (xSemaphoreTake(xSpiMutex, portMAX_DELAY) != pdTRUE) {
+            return 1; // Failed to acquire mutex
+        }
+    }
     
     /* set cs low */
     W25QXX_CS_LOW();
@@ -44,42 +108,75 @@ uint8_t spi_write_read(uint8_t *in_buf, uint32_t in_len, uint8_t *out_buf, uint3
     /* if in_len > 0 */
     if (in_len > 0)
     {
-        /* transmit the input buffer */
-        res = HAL_SPI_Transmit(&hspi1, in_buf, in_len, 1000);
-        if (res != HAL_OK)
+        // Cache coherency: Clean D-Cache for transmit buffer
+        SCB_CleanDCache_by_Addr((uint32_t*)in_buf, in_len);
+        
+        /* transmit the input buffer using DMA */
+        hal_status = HAL_SPI_Transmit_DMA(&hspi1, in_buf, in_len);
+        if (hal_status != HAL_OK)
         {
+            w25qxx_interface_debug_print("HAL_SPI_Transmit_DMA failed: %d\n", hal_status);
             /* set cs high */
             W25QXX_CS_HIGH();
+            if (xSpiMutex != NULL) xSemaphoreGive(xSpiMutex);
+            return 1;
+        }
+        
+        // Wait for DMA completion
+        hal_status = w25qxx_wait_for_dma_completion();
+        if (hal_status != HAL_OK) {
+            /* set cs high */
+            W25QXX_CS_HIGH();
+            if (xSpiMutex != NULL) xSemaphoreGive(xSpiMutex);
             return 1;
         }
     }
     
-    /* if out_len > 0 */
+    /* if out_len > 0 it means receive operation */
     if (out_len > 0)
     {
-        /* receive to the output buffer */
-        res = HAL_SPI_Receive(&hspi1, out_buf, out_len, 1000);
-        if (res != HAL_OK)
+        /* receive to the output buffer using DMA */
+        hal_status = HAL_SPI_Receive_DMA(&hspi1, out_buf, out_len);
+        if (hal_status != HAL_OK)
         {
+            w25qxx_interface_debug_print("HAL_SPI_Receive_DMA failed: %d\n", hal_status);
             /* set cs high */
             W25QXX_CS_HIGH();
+            if (xSpiMutex != NULL) xSemaphoreGive(xSpiMutex);
             return 1;
         }
+        
+        // Wait for DMA completion
+        hal_status = w25qxx_wait_for_dma_completion();
+        if (hal_status != HAL_OK) {
+            /* set cs high */
+            W25QXX_CS_HIGH();
+            if (xSpiMutex != NULL) xSemaphoreGive(xSpiMutex);
+            return 1;
+        }
+        
+        // Cache coherency: Invalidate D-Cache for receive buffer
+        SCB_InvalidateDCache_by_Addr((uint32_t*)out_buf, out_len);
     }
     
     /* set cs high */
     W25QXX_CS_HIGH();
+    
+    // Release mutex
+    if (xSpiMutex != NULL) xSemaphoreGive(xSpiMutex);
     
     return 0;
 }
 
 void w25qxx_interface_delay_ms(uint32_t ms)
 {
+    /* delay ms */
     vTaskDelay(pdMS_TO_TICKS(ms));
 }
 
 void w25qxx_interface_delay_us(uint32_t us)
 {
+    /* delay us */
     if (us >= 1000)
     {
         vTaskDelay(pdMS_TO_TICKS(us / 1000));

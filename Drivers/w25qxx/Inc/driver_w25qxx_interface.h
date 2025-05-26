@@ -3,8 +3,10 @@
 
 #include "driver_w25qxx.h"
 #include "stm32f7xx_hal.h" // Adjust include to your series
-// #include "stdint.h"
 #include "main.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h"
 
 //------------------------------------------------------------------------------
 // Chip-select control (change to your board_config or port as needed)
@@ -14,6 +16,16 @@
 
 #define W25QXX_CS_LOW() HAL_GPIO_WritePin(W25QXX_CS_PORT, W25QXX_CS_PIN, GPIO_PIN_RESET)
 #define W25QXX_CS_HIGH() HAL_GPIO_WritePin(W25QXX_CS_PORT, W25QXX_CS_PIN, GPIO_PIN_SET)
+
+//------------------------------------------------------------------------------
+// DMA Configuration
+//------------------------------------------------------------------------------
+#define W25QXX_DMA_TIMEOUT_MS 1000
+#define CACHE_LINE_SIZE 32
+
+// External variables that need to be defined in main.c or elsewhere
+extern TaskHandle_t xW25QxxTaskHandle;
+extern SemaphoreHandle_t xSpiMutex;
 
 //------------------------------------------------------------------------------
 // SPI, Delay and Debug “hooks”
@@ -91,7 +103,7 @@ void w25qxx_interface_delay_us(uint32_t us);
  */
 void w25qxx_interface_debug_print(const char *const fmt, ...);
 
-// Add the helper function declaration
+// Add the helper function declaration (now DMA-enabled)
 uint8_t spi_write_read(uint8_t *in_buf, uint32_t in_len, uint8_t *out_buf, uint32_t out_len);
 
 /**

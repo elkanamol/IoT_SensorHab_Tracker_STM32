@@ -124,6 +124,63 @@ uint8_t W25Q64_FlushPageBuffer(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+// DMA completion callbacks
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+  if (hspi == &hspi1 && xW25QxxTaskHandle != NULL)
+  {
+    // Notify the waiting W25QXX task that TX is complete
+    vTaskNotifyGiveFromISR(xW25QxxTaskHandle, &xHigherPriorityTaskWoken);
+
+    // Perform context switch if necessary
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+  }
+}
+
+void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+  if (hspi == &hspi1 && xW25QxxTaskHandle != NULL)
+  {
+    // Notify the waiting W25QXX task that RX is complete
+    vTaskNotifyGiveFromISR(xW25QxxTaskHandle, &xHigherPriorityTaskWoken);
+
+    // Perform context switch if necessary
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+  }
+}
+
+void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+  if (hspi == &hspi1 && xW25QxxTaskHandle != NULL)
+  {
+    // Notify the waiting W25QXX task that TxRx is complete
+    vTaskNotifyGiveFromISR(xW25QxxTaskHandle, &xHigherPriorityTaskWoken);
+
+    // Perform context switch if necessary
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+  }
+}
+
+void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
+{
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+  if (hspi == &hspi1 && xW25QxxTaskHandle != NULL)
+  {
+    // Notify the waiting task even on error so it doesn't hang
+    vTaskNotifyGiveFromISR(xW25QxxTaskHandle, &xHigherPriorityTaskWoken);
+
+    // Perform context switch if necessary
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+  }
+}
+
 // W25Q64 utility functions
 uint32_t W25Q64_GetSectorAddress(uint32_t address)
 {
