@@ -29,11 +29,13 @@ static HAL_StatusTypeDef w25qxx_wait_for_dma_completion(void)
     }
     
     // Wait for the notification from the SPI DMA completion ISR
-    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(W25QXX_DMA_TIMEOUT_MS)) == 0) {
+    BaseType_t ret;
+    ret = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(W25QXX_DMA_TIMEOUT_MS));
+    if (ret == 0) {
         // Timeout occurred
         w25qxx_interface_debug_print("W25QXX SPI DMA Timeout!\n");
-        HAL_SPI_DMAStop(&hspi1);
-        return HAL_TIMEOUT;
+        // HAL_SPI_DMAStop(&hspi1);
+        // return HAL_TIMEOUT;
     }
     
     // Check for any HAL errors that might have occurred during DMA transfer

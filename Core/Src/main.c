@@ -77,10 +77,11 @@ struct bme280_data bme_comp_data;
 // Define a structure to store BME280 readings with timestamp
 typedef struct
 {
-  uint32_t timestamp; // Timestamp in milliseconds
-  float temperature;  // Temperature in Celsius
-  float pressure;     // Pressure in hPa
-  float humidity;     // Humidity in %
+  uint32_t timestamp;   // Timestamp in milliseconds
+  float temperature;    // Temperature in Celsius
+  float pressure;       // Pressure in hPa
+  float humidity;       // Humidity in %
+  uint32_t crc;         // CRC32 of the entire record
 } BME280_Record_t;
 
 // W25Q64 specific variables with page buffering
@@ -238,45 +239,45 @@ uint8_t W25Q64_AddRecordToPageBuffer(BME280_Record_t *record)
 // Flush page buffer to flash (writes 256 bytes at once)
 uint8_t W25Q64_FlushPageBuffer(void)
 {
-    if (records_in_buffer == 0)
-        return 0; // Nothing to flush
-    
-    printf("Flushing %d records to page 0x%08lX\r\n", records_in_buffer, current_page_address);
-    
-    // Fill remaining buffer with 0xFF (empty records)
-    for (uint8_t i = records_in_buffer; i < RECORDS_PER_PAGE; i++)
+  if (records_in_buffer == 0)
+    return 0; // Nothing to flush
+
+  printf("Flushing %d records to page 0x%08lX\r\n", records_in_buffer, current_page_address);
+
+  // Fill remaining buffer with 0xFF (empty records)
+  for (uint8_t i = records_in_buffer; i < RECORDS_PER_PAGE; i++)
+  {
+    memset(&page_buffer[i], 0xFF, sizeof(BME280_Record_t));
+  }
+
+  // Write entire 256-byte page at once (much more efficient!)
+  uint8_t status = w25qxx_basic_write(current_page_address, (uint8_t *)page_buffer, W25Q64_PAGE_SIZE);
+
+  if (status == 0)
+  {
+    printf("✓ Page written successfully (256 bytes)\r\n");
+
+    // Move to next page
+    current_page_address += W25Q64_PAGE_SIZE;
+
+    // FIFO: Wrap around when reaching end of flash
+    if (current_page_address >= W25Q64_TOTAL_SIZE)
     {
-        memset(&page_buffer[i], 0xFF, sizeof(BME280_Record_t));
+      printf("Flash full, wrapping to beginning (FIFO mode)\r\n");
+      current_page_address = DATA_START_ADDRESS;
     }
-    
-    // Write entire 256-byte page at once (much more efficient!)
-    uint8_t status = w25qxx_basic_write(current_page_address, (uint8_t *)page_buffer, W25Q64_PAGE_SIZE);
-    
-    if (status == 0)
-    {
-        printf("✓ Page written successfully (256 bytes)\r\n");
-        
-        // Move to next page
-        current_page_address += W25Q64_PAGE_SIZE;
-        
-        // FIFO: Wrap around when reaching end of flash
-        if (current_page_address >= W25Q64_TOTAL_SIZE)
-        {
-            printf("Flash full, wrapping to beginning (FIFO mode)\r\n");
-            current_page_address = DATA_START_ADDRESS;
-        }
-        
-        // Reset buffer
-        records_in_buffer = 0;
-        memset(page_buffer, 0xFF, sizeof(page_buffer));
-        
-        return 0;
-    }
-    else
-    {
-        printf("✗ Page write failed (err=%d)\r\n", status);
-        return 1;
-    }
+
+    // Reset buffer
+    records_in_buffer = 0;
+    memset(page_buffer, 0xFF, sizeof(page_buffer));
+
+    return 0;
+  }
+  else
+  {
+    printf("✗ Page write failed (err=%d)\r\n", status);
+    return 1;
+  }
 }
 
 // Force flush buffer (call before reset/power down)
@@ -1081,7 +1082,7 @@ void StartDataLoggerTask(void *argument)
         }
         
         // Wait before next logging cycle
-        vTaskDelay(pdMS_TO_TICKS(5000)); // Log every 5 seconds
+        vTaskDelay(pdMS_TO_TICKS(1000)); // Log every 5 seconds
     }
     
     // Cleanup (won't be reached in infinite loop, but good practice)
