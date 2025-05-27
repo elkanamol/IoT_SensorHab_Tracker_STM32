@@ -51,11 +51,6 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 // W25Q64 specific parameters
-#define W25Q64_SECTOR_SIZE      4096        // 4KB sectors
-#define W25Q64_PAGE_SIZE        256         // 256 byte pages
-#define W25Q64_TOTAL_SIZE       8388608     // 8MB total (8 * 1024 * 1024)
-#define W25Q64_BLOCK_SIZE       65536       // 64KB blocks
-#define DATA_START_ADDRESS      0x1000      // Start logging at 4KB offset (after test area)
 
 /* USER CODE END PD */
 
@@ -74,23 +69,11 @@ static RC76XX_Handle_t mqttHandle;
 struct bme280_dev bme_device;
 struct bme280_data bme_comp_data;
 
-// Define a structure to store BME280 readings with timestamp
-typedef struct
-{
-  uint32_t timestamp;   // Timestamp in milliseconds
-  float temperature;    // Temperature in Celsius
-  float pressure;       // Pressure in hPa
-  float humidity;       // Humidity in %
-  uint32_t crc;         // CRC32 of the entire record
-} BME280_Record_t;
-
 // W25Q64 specific variables with page buffering
 #define RECORDS_PER_SECTOR (W25Q64_SECTOR_SIZE / sizeof(BME280_Record_t))
 #define RECORDS_PER_PAGE (W25Q64_PAGE_SIZE / sizeof(BME280_Record_t))
 #define PAGES_PER_SECTOR (W25Q64_SECTOR_SIZE / W25Q64_PAGE_SIZE)
 
-static BME280_Record_t lastReadRecord;
-static uint32_t nextWriteAddress = DATA_START_ADDRESS;
 static SemaphoreHandle_t bme280DataMutex = NULL;
 
 // Page buffering variables
@@ -99,11 +82,6 @@ static BME280_Record_t page_buffer[RECORDS_PER_PAGE];
 static uint8_t records_in_buffer = 0;
 static uint32_t current_page_address = DATA_START_ADDRESS;
 
-// FIFO management variables
-static uint32_t oldest_record_address = DATA_START_ADDRESS;
-static uint32_t newest_record_address = DATA_START_ADDRESS;
-static uint32_t total_records_written = 0;
-static bool flash_full = false;
 
 /* USER CODE END PV */
 
@@ -182,26 +160,7 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
   }
 }
 
-// W25Q64 utility functions
-uint32_t W25Q64_GetSectorAddress(uint32_t address)
-{
-  return (address / W25Q64_SECTOR_SIZE) * W25Q64_SECTOR_SIZE;
-}
 
-uint32_t W25Q64_GetPageAddress(uint32_t address)
-{
-  return (address / W25Q64_PAGE_SIZE) * W25Q64_PAGE_SIZE;
-}
-
-uint32_t W25Q64_GetSectorNumber(uint32_t address)
-{
-  return address / W25Q64_SECTOR_SIZE;
-}
-
-uint32_t W25Q64_GetPageNumber(uint32_t address)
-{
-  return address / W25Q64_PAGE_SIZE;
-}
 
 void W25Q64_PrintFlashInfo(void)
 {
@@ -255,7 +214,7 @@ uint8_t W25Q64_FlushPageBuffer(void)
 
   if (status == 0)
   {
-    printf("✓ Page written successfully (256 bytes)\r\n");
+    printf("Page written successfully (256 bytes)\r\n");
 
     // Move to next page
     current_page_address += W25Q64_PAGE_SIZE;
@@ -290,71 +249,6 @@ void W25Q64_ForceFlush(void)
     }
 }
 
-// Find the next write position by scanning flash
-uint32_t W25Q64_FindNextWritePosition(void)
-{
-  BME280_Record_t tempRecord;
-  uint32_t last_valid_address = DATA_START_ADDRESS;
-  bool found_empty = false;
-
-  printf("Scanning flash to find next write position...\r\n");
-
-  // Scan page by page for efficiency
-  for (uint32_t page_addr = DATA_START_ADDRESS; page_addr < W25Q64_TOTAL_SIZE; page_addr += W25Q64_PAGE_SIZE)
-  {
-    // Read first record of the page
-    if (w25qxx_basic_read(page_addr, (uint8_t *)&tempRecord, sizeof(BME280_Record_t)) == 0)
-    {
-      if (tempRecord.timestamp == 0xFFFFFFFF)
-      {
-        // Found empty page
-        found_empty = true;
-        current_page_address = page_addr;
-        break;
-      }
-      else
-      {
-        // Page has data, check all records in this page
-        for (uint8_t record_idx = 0; record_idx < RECORDS_PER_PAGE; record_idx++)
-        {
-          uint32_t record_addr = page_addr + (record_idx * sizeof(BME280_Record_t));
-          if (w25qxx_basic_read(record_addr, (uint8_t *)&tempRecord, sizeof(BME280_Record_t)) == 0)
-          {
-            if (tempRecord.timestamp == 0xFFFFFFFF)
-            {
-              // Found first empty record in this page
-              found_empty = true;
-              current_page_address = W25Q64_GetPageAddress(record_addr);
-              records_in_buffer = record_idx; // Resume from this position in page
-              break;
-            }
-            else
-            {
-              last_valid_address = record_addr;
-            }
-          }
-        }
-        if (found_empty)
-          break;
-      }
-    }
-  }
-
-  if (!found_empty)
-  {
-    printf("Flash appears to be full, enabling FIFO mode\r\n");
-    flash_full = true;
-    current_page_address = DATA_START_ADDRESS;
-    oldest_record_address = DATA_START_ADDRESS;
-  }
-
-  newest_record_address = last_valid_address;
-
-  printf("Next write page: 0x%08lX\r\n", current_page_address);
-  printf("Records already in current page: %d\r\n", records_in_buffer);
-
-  return current_page_address;
-}
 /* USER CODE END 0 */
 
 /**
@@ -1091,60 +985,6 @@ void StartDataLoggerTask(void *argument)
     w25qxx_basic_deinit();
 }
 
-// Function to print a buffer in hex format
-void PrintBufferHex(const uint8_t *buffer, uint32_t size, uint32_t baseAddress)
-{
-  printf("--- Buffer Hex Dump (Base Address: 0x%08lX) ---\r\n", baseAddress);
-
-  // Print the buffer in lines of 32 bytes each
-  for (uint32_t offset = 0; offset < size; offset += 32)
-  {
-    // Print address at the start of each line
-    printf("0x%08lX: ", baseAddress + offset);
-
-    // Print hex values
-    for (uint32_t i = 0; i < 32 && (offset + i) < size; i++)
-    {
-      printf("%02X ", buffer[offset + i]);
-
-      // Add extra space every 4 bytes for readability
-      if ((i + 1) % 4 == 0)
-      {
-        printf(" ");
-      }
-    }
-
-    // Fill remaining space if less than 32 bytes in this line
-    uint32_t bytesInLine = ((offset + 32) <= size) ? 32 : (size - offset);
-    for (uint32_t i = bytesInLine; i < 32; i++)
-    {
-      printf("   "); // 3 spaces for each missing byte
-      if ((i + 1) % 4 == 0)
-      {
-        printf(" "); // Extra space every 4 bytes
-      }
-    }
-
-    // Print ASCII representation
-    printf(" | ");
-    for (uint32_t i = 0; i < 32 && (offset + i) < size; i++)
-    {
-      // Print only printable ASCII characters, otherwise print a dot
-      if (buffer[offset + i] >= 32 && buffer[offset + i] <= 126)
-      {
-        printf("%c", buffer[offset + i]);
-      }
-      else
-      {
-        printf(".");
-      }
-    }
-
-    // printf("\r\n");
-  }
-
-  printf("--- End of Buffer Hex Dump ---\r\n");
-}
 /* USER CODE END 4 */
 
 /**

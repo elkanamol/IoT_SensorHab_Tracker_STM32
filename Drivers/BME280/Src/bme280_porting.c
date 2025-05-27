@@ -125,6 +125,47 @@ static void user_delay_us(uint32_t period_us, void *intf_ptr)
     vTaskDelay(pdMS_TO_TICKS(period_ms));
 }
 
+// Function to debug raw sensor data
+void debug_bme280_raw_data(struct bme280_dev *dev)
+{
+    uint8_t data[8];
+    int8_t rslt = bme280_get_regs(BME280_REG_DATA, data, 8, dev);
+
+    if (rslt == BME280_OK)
+    {
+        printf("Raw data registers: ");
+        for (int i = 0; i < 8; i++)
+        {
+            printf("0x%02X ", data[i]);
+        }
+        printf("\r\n");
+
+        // Check if data is valid (not 0x80 0x00 0x00 pattern)
+        if (data[0] == 0x80 && data[1] == 0x00 && data[2] == 0x00)
+        {
+            printf("WARNING: Data appears to be invalid/not ready\r\n");
+        }
+    }
+    else
+    {
+        printf("Failed to read raw data registers: %d\r\n", rslt);
+    }
+}
+
+void convert_bme_data_to_int(struct bme280_data *bme_comp_data, bme_calc_data_int_t *bme_calc_data)
+{
+
+    bme_calc_data->temp_whole = (int32_t)bme_comp_data->temperature;
+    bme_calc_data->temp_frac = (int32_t)((bme_comp_data->temperature - bme_calc_data->temp_whole) * 100 + 0.5); // Round to nearest
+
+    bme_calc_data->press_pa = (uint32_t)(bme_comp_data->pressure + 0.5); // Round to nearest Pa
+    bme_calc_data->press_whole = bme_calc_data->press_pa / 100;
+    bme_calc_data->press_frac = bme_calc_data->press_pa % 100;
+
+    bme_calc_data->hum_whole = (uint32_t)bme_comp_data->humidity;
+    bme_calc_data->hum_frac = (uint32_t)((bme_comp_data->humidity - bme_calc_data->hum_whole) * 100 + 0.5); // Round to nearest
+}
+
 // --- HAL I2C DMA Callback Wrappers ---
 // These functions should be called from the global HAL I2C callbacks in stm32xxxx_it.c or similar
 
@@ -177,46 +218,7 @@ void bme280_hal_i2c_error_callback(I2C_HandleTypeDef *hi2c)
     }
 }
 
-// Function to debug raw sensor data
-void debug_bme280_raw_data(struct bme280_dev *dev)
-{
-    uint8_t data[8];
-    int8_t rslt = bme280_get_regs(BME280_REG_DATA, data, 8, dev);
 
-    if (rslt == BME280_OK)
-    {
-        printf("Raw data registers: ");
-        for (int i = 0; i < 8; i++)
-        {
-            printf("0x%02X ", data[i]);
-        }
-        printf("\r\n");
-
-        // Check if data is valid (not 0x80 0x00 0x00 pattern)
-        if (data[0] == 0x80 && data[1] == 0x00 && data[2] == 0x00)
-        {
-            printf("WARNING: Data appears to be invalid/not ready\r\n");
-        }
-    }
-    else
-    {
-        printf("Failed to read raw data registers: %d\r\n", rslt);
-    }
-}
-
-void convert_bme_data_to_int(struct bme280_data *bme_comp_data, bme_calc_data_int_t *bme_calc_data)
-{
-
-    bme_calc_data->temp_whole = (int32_t)bme_comp_data->temperature;
-    bme_calc_data->temp_frac = (int32_t)((bme_comp_data->temperature - bme_calc_data->temp_whole) * 100 + 0.5); // Round to nearest
-
-    bme_calc_data->press_pa = (uint32_t)(bme_comp_data->pressure + 0.5); // Round to nearest Pa
-    bme_calc_data->press_whole = bme_calc_data->press_pa / 100;
-    bme_calc_data->press_frac = bme_calc_data->press_pa % 100;
-
-    bme_calc_data->hum_whole = (uint32_t)bme_comp_data->humidity;
-    bme_calc_data->hum_frac = (uint32_t)((bme_comp_data->humidity - bme_calc_data->hum_whole) * 100 + 0.5); // Round to nearest
-}
 
 /*
 // those function need to fix, its is not working in DMA mode.

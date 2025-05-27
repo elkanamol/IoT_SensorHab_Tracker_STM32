@@ -200,3 +200,79 @@ void w25qxx_interface_debug_print(const char *fmt, ...)
     va_end(args);
     printf("%s", buf);
 }
+
+// W25Q64 utility functions
+uint32_t W25Q64_GetSectorAddress(uint32_t address)
+{
+    return (address / W25Q64_SECTOR_SIZE) * W25Q64_SECTOR_SIZE;
+}
+
+uint32_t W25Q64_GetPageAddress(uint32_t address)
+{
+    return (address / W25Q64_PAGE_SIZE) * W25Q64_PAGE_SIZE;
+}
+
+uint32_t W25Q64_GetSectorNumber(uint32_t address)
+{
+    return address / W25Q64_SECTOR_SIZE;
+}
+
+uint32_t W25Q64_GetPageNumber(uint32_t address)
+{
+    return address / W25Q64_PAGE_SIZE;
+}
+
+// Function to print a buffer in hex format
+void PrintBufferHex(const uint8_t *buffer, uint32_t size, uint32_t baseAddress)
+{
+    printf("--- Buffer Hex Dump (Base Address: 0x%08lX) ---\r\n", baseAddress);
+
+    // Print the buffer in lines of 32 bytes each
+    for (uint32_t offset = 0; offset < size; offset += 32)
+    {
+        // Print address at the start of each line
+        printf("0x%08lX: ", baseAddress + offset);
+
+        // Print hex values
+        for (uint32_t i = 0; i < 32 && (offset + i) < size; i++)
+        {
+            printf("%02X ", buffer[offset + i]);
+
+            // Add extra space every 4 bytes for readability
+            if ((i + 1) % 4 == 0)
+            {
+                printf(" ");
+            }
+        }
+
+        // Fill remaining space if less than 32 bytes in this line
+        uint32_t bytesInLine = ((offset + 32) <= size) ? 32 : (size - offset);
+        for (uint32_t i = bytesInLine; i < 32; i++)
+        {
+            printf("   "); // 3 spaces for each missing byte
+            if ((i + 1) % 4 == 0)
+            {
+                printf(" "); // Extra space every 4 bytes
+            }
+        }
+
+        // Print ASCII representation
+        printf(" | ");
+        for (uint32_t i = 0; i < 32 && (offset + i) < size; i++)
+        {
+            // Print only printable ASCII characters, otherwise print a dot
+            if (buffer[offset + i] >= 32 && buffer[offset + i] <= 126)
+            {
+                printf("%c", buffer[offset + i]);
+            }
+            else
+            {
+                printf(".");
+            }
+        }
+
+        // printf("\r\n");
+    }
+
+    printf("--- End of Buffer Hex Dump ---\r\n");
+}
