@@ -34,8 +34,10 @@
 #include "mqtt_secrets.h"
 #include "stdlib.h"
 
-#include "bme280.h"
-#include "bme280_porting.h"
+#include "bme280_tasks.h"
+// #include "bme280.h"
+// #include "bme280_porting.h"
+#include "datalogger.h"
 
 #include "w25qxx_hal.h"
 #include "driver_w25qxx_interface.h"
@@ -50,7 +52,16 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-// W25Q64 specific parameters
+// Ring buffer configuration (64KB FIFO)
+#define FLASH_RING_BUFFER_SIZE (64 * 1024)  // 64KB - can be changed later
+#define RING_BUFFER_START_ADDRESS (DATA_START_ADDRESS)
+#define RING_BUFFER_END_ADDRESS (RING_BUFFER_START_ADDRESS + FLASH_RING_BUFFER_SIZE)
+#define RECORDS_PER_PAGE (W25Q64_PAGE_SIZE / sizeof(BME280_Record_t))
+
+// Queue configuration
+#define QUEUE_SEND_TIMEOUT_MS 1000
+#define DATA_LOGGER_QUEUE_SIZE 20
+#define MAX_QUEUE_WAIT_MS 1000
 
 /* USER CODE END PD */
 
@@ -66,22 +77,8 @@ extern UART_HandleTypeDef huart2;
 extern I2C_HandleTypeDef hi2c1;
 extern SPI_HandleTypeDef hspi1;
 static RC76XX_Handle_t mqttHandle;
-struct bme280_dev bme_device;
-struct bme280_data bme_comp_data;
-
-// W25Q64 specific variables with page buffering
-#define RECORDS_PER_SECTOR (W25Q64_SECTOR_SIZE / sizeof(BME280_Record_t))
-#define RECORDS_PER_PAGE (W25Q64_PAGE_SIZE / sizeof(BME280_Record_t))
-#define PAGES_PER_SECTOR (W25Q64_SECTOR_SIZE / W25Q64_PAGE_SIZE)
-
-static SemaphoreHandle_t bme280DataMutex = NULL;
-
-// Page buffering variables
-#define RECORDS_PER_PAGE (W25Q64_PAGE_SIZE / sizeof(BME280_Record_t))  // 256/16 = 16 records per page
-static BME280_Record_t page_buffer[RECORDS_PER_PAGE];
-static uint8_t records_in_buffer = 0;
-static uint32_t current_page_address = DATA_START_ADDRESS;
-
+// struct bme280_dev bme_device;
+// struct bme280_data bme_comp_data;
 
 /* USER CODE END PV */
 
@@ -94,10 +91,17 @@ static void MQTT_Task(void *pvParameters);
 void StartBme280Task(void *argument);
 void StartW25QTestTask(void *argument);
 void StartDataLoggerTask(void *argument);
-// static W25Q_StatusTypeDef W25Q_Flash_Init(void);
-void PrintBufferHex(const uint8_t *buffer, uint32_t size, uint32_t baseAddress);
-uint8_t W25Q64_FlushPageBuffer(void);
 
+
+// // Queue interface functions (non-static, called from other tasks)
+// BaseType_t DataLogger_QueueBME280Data(struct bme280_data *bme_data);
+// BaseType_t DataLogger_QueueSystemEvent(const char *event_text);
+
+// BME280 Task and helper functions
+void StartBme280Task(void *argument);
+
+void PrintBufferHex(const uint8_t *buffer, uint32_t size, uint32_t baseAddress);
+/* USER CODE END PFP */
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -160,95 +164,6 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
   }
 }
 
-
-
-void W25Q64_PrintFlashInfo(void)
-{
-  printf("\r\n=== W25Q64 Flash Information ===\r\n");
-  printf("Total Size: %d bytes (%.1f MB)\r\n", W25Q64_TOTAL_SIZE, W25Q64_TOTAL_SIZE / 1024.0f / 1024.0f);
-  printf("Sector Size: %d bytes (%d KB)\r\n", W25Q64_SECTOR_SIZE, W25Q64_SECTOR_SIZE / 1024);
-  printf("Page Size: %d bytes\r\n", W25Q64_PAGE_SIZE);
-  printf("BME280 Record Size: %d bytes\r\n", sizeof(BME280_Record_t));
-  printf("Records per Page: %d\r\n", RECORDS_PER_PAGE);
-  printf("Records per Sector: %d\r\n", RECORDS_PER_SECTOR);
-  printf("Pages per Sector: %d\r\n", PAGES_PER_SECTOR);
-  printf("Total Records Capacity: %d\r\n", (W25Q64_TOTAL_SIZE - DATA_START_ADDRESS) / sizeof(BME280_Record_t));
-  printf("================================\r\n\r\n");
-}
-
-// Add record to page buffer (efficient approach)
-uint8_t W25Q64_AddRecordToPageBuffer(BME280_Record_t *record)
-{
-    // Add record to RAM buffer
-    page_buffer[records_in_buffer] = *record;
-    records_in_buffer++;
-    
-    printf("Buffered record %d/%d: T=%.2f°C\r\n", 
-           records_in_buffer, RECORDS_PER_PAGE, record->temperature);
-    
-    // When buffer is full, write entire page at once
-    if (records_in_buffer >= RECORDS_PER_PAGE)
-    {
-        return W25Q64_FlushPageBuffer();
-    }
-    
-    return 0; // Success, record buffered
-}
-
-// Flush page buffer to flash (writes 256 bytes at once)
-uint8_t W25Q64_FlushPageBuffer(void)
-{
-  if (records_in_buffer == 0)
-    return 0; // Nothing to flush
-
-  printf("Flushing %d records to page 0x%08lX\r\n", records_in_buffer, current_page_address);
-
-  // Fill remaining buffer with 0xFF (empty records)
-  for (uint8_t i = records_in_buffer; i < RECORDS_PER_PAGE; i++)
-  {
-    memset(&page_buffer[i], 0xFF, sizeof(BME280_Record_t));
-  }
-
-  // Write entire 256-byte page at once (much more efficient!)
-  uint8_t status = w25qxx_basic_write(current_page_address, (uint8_t *)page_buffer, W25Q64_PAGE_SIZE);
-
-  if (status == 0)
-  {
-    printf("Page written successfully (256 bytes)\r\n");
-
-    // Move to next page
-    current_page_address += W25Q64_PAGE_SIZE;
-
-    // FIFO: Wrap around when reaching end of flash
-    if (current_page_address >= W25Q64_TOTAL_SIZE)
-    {
-      printf("Flash full, wrapping to beginning (FIFO mode)\r\n");
-      current_page_address = DATA_START_ADDRESS;
-    }
-
-    // Reset buffer
-    records_in_buffer = 0;
-    memset(page_buffer, 0xFF, sizeof(page_buffer));
-
-    return 0;
-  }
-  else
-  {
-    printf("✗ Page write failed (err=%d)\r\n", status);
-    return 1;
-  }
-}
-
-// Force flush buffer (call before reset/power down)
-void W25Q64_ForceFlush(void)
-{
-    if (records_in_buffer > 0)
-    {
-        printf("Force flushing %d records before shutdown\r\n", records_in_buffer);
-        W25Q64_FlushPageBuffer();
-    }
-}
-
 /* USER CODE END 0 */
 
 /**
@@ -300,12 +215,7 @@ int main(void)
   /* Init scheduler */
   osKernelInitialize();
   // MX_FREERTOS_Init();
-  bme280DataMutex = xSemaphoreCreateMutex();
-  if (bme280DataMutex == NULL)
-  {
-    printf("Failed to create BME280 data mutex\r\n");
-    Error_Handler();
-  }
+
   BaseType_t TaskStatus;
   // Create the uAT parser task
 
@@ -575,7 +485,7 @@ static void MQTT_Task(void *argument)
   for (;;)
   {
 
-    uint32_t now = HAL_GetTick();
+    // uint32_t now = HAL_GetTick();
     /* Publish a message */
     // const char *pubTopic = "home/LWTMessage";
     // Format BME280 data into MQTT payload for ThingSpeak
@@ -608,382 +518,7 @@ static void MQTT_Task(void *argument)
   }
 }
 
-// Task function for BME280
-void StartBme280Task(void *argument)
-{
-  (void)argument;
-  int8_t rslt;
-  uint32_t meas_delay;
-  struct bme280_settings settings;
 
-  // Initialize the BME280 interface porting layer
-  // Use BME280_I2C_ADDR_PRIM (0x76) or BME280_I2C_ADDR_SEC (0x77)
-  rslt = bme280_interface_init(&bme_device, &hi2c1, BME280_I2C_ADDR_PRIM);
-  if (rslt != BME280_OK)
-  {
-    printf("Failed to initialize BME280 interface. Error: %d\r\n", rslt);
-    // Handle error: perhaps delete task or enter error loop
-    vTaskDelete(NULL);
-    return;
-  }
-
-  // Initialize the BME280 sensor
-  rslt = bme280_init(&bme_device);
-  if (rslt != BME280_OK)
-  {
-    printf("Failed to initialize BME280 sensor. Error: %d\r\n", rslt);
-    // Handle error
-    bme280_interface_deinit(&bme_device); // Clean up interface resources
-    vTaskDelete(NULL);
-    return;
-  }
-  printf("BME280 initialized successfully. Chip ID: 0x%X\r\n", bme_device.chip_id);
-  vTaskDelay(10);
-  // Configure sensor settings (example: normal mode, standard oversampling)
-  // First get the current settings
-  rslt = bme280_get_sensor_settings(&settings, &bme_device);
-  if (rslt != BME280_OK)
-  {
-    printf("Failed to get BME280 sensor settings. Error: %d\r\n", rslt);
-    bme280_interface_deinit(&bme_device);
-    vTaskDelete(NULL);
-    return;
-  }
-  vTaskDelay(10);
-
-  // Now modify the settings
-  settings.osr_h = BME280_OVERSAMPLING_1X;
-  settings.osr_p = BME280_OVERSAMPLING_4X;
-  settings.osr_t = BME280_OVERSAMPLING_2X;
-  settings.filter = BME280_FILTER_COEFF_OFF;
-  settings.standby_time = BME280_STANDBY_TIME_1000_MS; // Example, adjust as needed
-
-  // Apply settings one by one instead of all at once
-
-  // First apply humidity settings
-  rslt = bme280_set_sensor_settings(BME280_SEL_OSR_HUM, &settings, &bme_device);
-  if (rslt != BME280_OK)
-  {
-    printf("Failed to set humidity settings. Error: %d\r\n", rslt);
-  }
-  HAL_Delay(5);
-
-  // Then apply temperature and pressure settings
-  rslt = bme280_set_sensor_settings(BME280_SEL_OSR_TEMP | BME280_SEL_OSR_PRESS, &settings, &bme_device);
-  if (rslt != BME280_OK)
-  {
-    printf("Failed to set temp/press settings. Error: %d\r\n", rslt);
-  }
-  HAL_Delay(5);
-
-  // Finally apply filter and standby settings
-  rslt = bme280_set_sensor_settings(BME280_SEL_FILTER | BME280_SEL_STANDBY, &settings, &bme_device);
-  if (rslt != BME280_OK)
-  {
-    printf("Failed to set filter/standby settings. Error: %d\r\n", rslt);
-  }
-
-  // Set the sensor to normal mode
-  rslt = bme280_set_sensor_mode(BME280_POWERMODE_NORMAL, &bme_device);
-  if (rslt != BME280_OK)
-  {
-    printf("Failed to set BME280 sensor mode. Error: %d\r\n", rslt);
-    // Handle error
-    bme280_interface_deinit(&bme_device);
-    vTaskDelete(NULL);
-    return;
-  }
-
-  printf("Waiting for first measurement to complete...\r\n");
-  HAL_Delay(50);
-  uint8_t status;
-  do
-  {
-    rslt = bme280_get_regs(BME280_REG_STATUS, &status, 1, &bme_device);
-    HAL_Delay(10);
-  } while (rslt == BME280_OK && (status & BME280_STATUS_MEAS_DONE) != 0);
-  printf("First measurement complete, status: 0x%02X\r\n", status);
-
-  // Calculate the minimum delay required between measurements based on settings
-  rslt = bme280_cal_meas_delay(&meas_delay, &settings);
-  if (rslt != BME280_OK)
-  {
-    printf("Failed to calculate measurement delay. Error: %d\r\n", rslt);
-    // Handle error, but can continue
-  }
-  else
-  {
-    printf("Calculated measurement delay: %lu us\r\n", (unsigned long)meas_delay);
-  }
-
-  for (;;)
-  {
-    // Set sensor to forced mode (takes one measurement then goes to sleep)
-    rslt = bme280_set_sensor_mode(BME280_POWERMODE_FORCED, &bme_device);
-    if (rslt != BME280_OK)
-    {
-      printf("Failed to set forced mode: %d\r\n", rslt);
-    }
-
-    // Wait for the measurement to complete
-    HAL_Delay(50); // Short delay for measurement to start
-    uint8_t status;
-    do
-    {
-      rslt = bme280_get_regs(BME280_REG_STATUS, &status, 1, &bme_device);
-      HAL_Delay(10);
-    } while (rslt == BME280_OK && (status & BME280_STATUS_MEAS_DONE) != 0);
-
-    // Now read the data
-    rslt = bme280_get_sensor_data(BME280_ALL, &bme_comp_data, &bme_device);
-    if (rslt == BME280_OK)
-    {
-      // Take mutex before updating the shared BME280 data
-      if (bme280DataMutex != NULL && xSemaphoreTake(bme280DataMutex, pdMS_TO_TICKS(100)) == pdTRUE)
-      {
-        // Data is already in bme_comp_data, which is a global variable
-        // The DataLogger task will access this data
-
-        // Convert and print the data (keep this for debugging)
-        bme_calc_data_int_t bme_calc_data;
-        convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
-
-        printf("Temp: %ld.%02ld C, Press: %lu.%02lu hPa, Hum: %lu.%02lu %%\r\n",
-               bme_calc_data.temp_whole, bme_calc_data.temp_frac,
-               bme_calc_data.press_whole, bme_calc_data.press_frac,
-               bme_calc_data.hum_whole, bme_calc_data.hum_frac);
-
-        // Release the mutex
-        xSemaphoreGive(bme280DataMutex);
-      }
-      else
-      {
-        printf("Failed to acquire BME280 data mutex for updating\r\n");
-      }
-    }
-    else
-    {
-      printf("Failed to get sensor data: %d\r\n", rslt);
-    }
-
-    // Wait before next reading
-    vTaskDelay(pdMS_TO_TICKS(1000));
-  }
-}
-
-void StartDataLoggerTask(void *argument)
-{
-    (void)argument;
-    uint8_t flash_status;
-    uint8_t manufacturer;
-    uint8_t device_id;
-    BME280_Record_t record;
-    
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    printf("Data Logger Task starting with Page Buffering...\r\n");
-    
-    // Create mutex for accessing BME280 data if it doesn't exist yet
-    if (bme280DataMutex == NULL)
-    {
-        bme280DataMutex = xSemaphoreCreateMutex();
-        if (bme280DataMutex == NULL)
-        {
-            printf("Failed to create BME280 data mutex\r\n");
-            vTaskDelete(NULL);
-            return;
-        }
-    }
-    
-    // Initialize page buffer
-    memset(page_buffer, 0xFF, sizeof(page_buffer));
-    records_in_buffer = 0;
-    current_page_address = DATA_START_ADDRESS;
-    
-    // Initialize W25Q64 flash using basic driver
-    printf("Initializing W25Q64 flash...\r\n");
-    flash_status = w25qxx_basic_init(W25Q64, W25QXX_INTERFACE_SPI, W25QXX_BOOL_FALSE);
-    if (flash_status != 0)
-    {
-        printf("Failed to initialize W25Q64 flash (err=%d)\r\n", flash_status);
-        vTaskDelete(NULL);
-        return;
-    }
-    
-    printf("W25Q64 flash initialized successfully\r\n");
-    
-    // Get manufacturer and device ID
-    flash_status = w25qxx_basic_get_id(&manufacturer, &device_id);
-    if (flash_status == 0)
-    {
-        printf("W25Q64: manufacturer=0x%02X, device_id=0x%02X\r\n", manufacturer, device_id);
-        if (manufacturer == 0xEF && device_id == 0x16)
-        {
-            printf("W25Q64 chip confirmed!\r\n");
-        }
-        else
-        {
-            printf("Warning: Unexpected chip ID (expected 0xEF 0x16)\r\n");
-        }
-    }
-    else
-    {
-        printf("Failed to read manufacturer/device ID\r\n");
-    }
-    
-    // Print flash information
-    printf("\r\n=== W25Q64 Page Buffering Configuration ===\r\n");
-    printf("Page Size: %d bytes\r\n", W25Q64_PAGE_SIZE);
-    printf("BME280 Record Size: %d bytes\r\n", sizeof(BME280_Record_t));
-    printf("Records per Page: %d\r\n", RECORDS_PER_PAGE);
-    printf("Buffer Size: %d records (%d bytes)\r\n", RECORDS_PER_PAGE, W25Q64_PAGE_SIZE);
-    printf("Starting Page Address: 0x%08lX\r\n", current_page_address);
-    printf("==========================================\r\n\r\n");
-    
-    // Find next write position by scanning existing data
-    printf("Scanning flash for existing data...\r\n");
-    BME280_Record_t scan_record;
-    bool found_empty_page = false;
-    
-    // Scan page by page to find where to resume
-    for (uint32_t page_addr = DATA_START_ADDRESS; page_addr < W25Q64_TOTAL_SIZE; page_addr += W25Q64_PAGE_SIZE)
-    {
-        // Read first record of each page
-        flash_status = w25qxx_basic_read(page_addr, (uint8_t *)&scan_record, sizeof(BME280_Record_t));
-        if (flash_status == 0 && scan_record.timestamp == 0xFFFFFFFF)
-        {
-            // Found empty page
-            current_page_address = page_addr;
-            found_empty_page = true;
-            printf("Found empty page at 0x%08lX\r\n", page_addr);
-            break;
-        }
-    }
-    
-    if (!found_empty_page)
-    {
-        printf("Flash appears full, starting FIFO mode from beginning\r\n");
-        current_page_address = DATA_START_ADDRESS;
-    }
-    
-    // Test basic functionality
-    printf("Testing W25Q64 basic operations...\r\n");
-    uint8_t test_data[8] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
-    uint8_t read_data[8] = {0};
-    
-    flash_status = w25qxx_basic_write(0x00000000, test_data, 8);
-    if (flash_status == 0)
-    {
-        flash_status = w25qxx_basic_read(0x00000000, read_data, 8);
-        if (flash_status == 0)
-        {
-            bool test_passed = true;
-            for (int i = 0; i < 8; i++)
-            {
-                if (test_data[i] != read_data[i])
-                {
-                    test_passed = false;
-                    break;
-                }
-            }
-            printf("W25Q64 basic test: %s\r\n", test_passed ? "✓ PASSED" : "✗ FAILED");
-        }
-    }
-    
-    printf("\r\n=== Starting Page-Buffered Data Logging ===\r\n");
-    printf("* Records will be buffered in RAM until page is full\r\n");
-    printf("* Each page write will transfer 256 bytes efficiently\r\n");
-    printf("* FIFO mode will activate when flash is full\r\n");
-    printf("===============================================\r\n\r\n");
-    
-    flash_status = w25qxx_basic_chip_erase();
-    if (flash_status == 0)
-    {
-        printf("Flash erased successfully\r\n");
-    }
-    else
-    {
-        printf("Flash erase failed (err=%d)\r\n", flash_status);
-    }
-
-    // Main data logging loop
-    uint32_t log_counter = 0;
-    uint32_t total_pages_written = 0;
-    
-    for (;;)
-    {
-        if (xSemaphoreTake(bme280DataMutex, pdMS_TO_TICKS(100)) == pdTRUE)
-        {
-            // Get BME280 data
-            bme_calc_data_int_t bme_calc_data;
-            convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
-            
-            // Prepare record
-            record.timestamp = HAL_GetTick();
-            record.temperature = (float)bme_calc_data.temp_whole + (float)bme_calc_data.temp_frac / 100.0f;
-            record.pressure = (float)bme_calc_data.press_whole + (float)bme_calc_data.press_frac / 100.0f;
-            record.humidity = (float)bme_calc_data.hum_whole + (float)bme_calc_data.hum_frac / 100.0f;
-            
-            xSemaphoreGive(bme280DataMutex);
-            
-            // Add record to page buffer (this is the key change!)
-            log_counter++;
-            printf("[%lu] ", log_counter);
-            
-            uint8_t buffer_status = W25Q64_AddRecordToPageBuffer(&record);
-            if (buffer_status == 0)
-            {
-                // Check if a page was written (buffer was flushed)
-                if (records_in_buffer == 0)
-                {
-                    total_pages_written++;
-                    printf("Page %lu written to flash (256 bytes)\r\n", total_pages_written);
-                }
-            }
-            else
-            {
-                printf("Failed to buffer record (err=%d)\r\n", buffer_status);
-            }
-            
-            // Progress report every 20 records
-            if (log_counter % 20 == 0)
-            {
-                printf("\r\n--- Page Buffer Status ---\r\n");
-                printf("Total records logged: %lu\r\n", log_counter);
-                printf("Total pages written: %lu\r\n", total_pages_written);
-                printf("Records in current buffer: %d/%d\r\n", records_in_buffer, RECORDS_PER_PAGE);
-                printf("Current page address: 0x%08lX\r\n", current_page_address);
-                printf("Next page write at: %d more records\r\n", RECORDS_PER_PAGE - records_in_buffer);
-                
-                // Calculate efficiency
-                uint32_t total_flash_writes = total_pages_written * W25Q64_PAGE_SIZE;
-                uint32_t data_written = log_counter * sizeof(BME280_Record_t);
-                printf("Flash efficiency: %lu%% (%lu data bytes / %lu flash bytes)\r\n",
-                       data_written * 100 / total_flash_writes, data_written, total_flash_writes);
-                printf("-------------------------\r\n\r\n");
-            }
-            
-            // Force flush every 100 records for safety
-            if (log_counter % 100 == 0 && records_in_buffer > 0)
-            {
-                printf("Periodic flush: saving %d buffered records\r\n", records_in_buffer);
-                W25Q64_FlushPageBuffer();
-                total_pages_written++;
-            }
-        }
-        else
-        {
-            printf("Failed to acquire BME280 data mutex\r\n");
-        }
-        
-        // Wait before next logging cycle
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Log every 5 seconds
-    }
-    
-    // Cleanup (won't be reached in infinite loop, but good practice)
-    printf("Shutting down: flushing remaining buffer...\r\n");
-    W25Q64_ForceFlush();
-    w25qxx_basic_deinit();
-}
 
 /* USER CODE END 4 */
 

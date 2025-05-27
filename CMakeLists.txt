@@ -54,6 +54,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/BME280/Src/bme280_porting.c
     Drivers/BME280/Src/bme280.c
     Core/Src/w25qxx_hal.c
+    Core/Src/datalogger.c
+    Core/Src/bme280_tasks.c    
     Drivers/w25qxx/Src/driver_w25qxx_interface.c
     Drivers/w25qxx/Src/driver_w25qxx.c
     Drivers/w25qxx/Src/driver_w25qxx_advance.c
