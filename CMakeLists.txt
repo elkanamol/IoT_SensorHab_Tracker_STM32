@@ -55,11 +55,15 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/BME280/Src/bme280.c
     Core/Src/w25qxx_hal.c
     Core/Src/datalogger.c
-    Core/Src/bme280_tasks.c    
+    Core/Src/bme280_tasks.c
+    Core/Src/mpu6050_task.c    
     Drivers/w25qxx/Src/driver_w25qxx_interface.c
     Drivers/w25qxx/Src/driver_w25qxx.c
     Drivers/w25qxx/Src/driver_w25qxx_advance.c
     Drivers/w25qxx/Src/driver_w25qxx_basic.c
+    Drivers/MPU6050/Src/driver_mpu6050_interface.c
+    Drivers/MPU6050/Src/driver_mpu6050.c
+    Drivers/MPU6050/Src/driver_mpu6050_basic.c
 )
 
 # Add include paths
@@ -69,6 +73,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/uAT/Inc
     Drivers/BME280/Inc
     Drivers/w25qxx/Inc
+    Drivers/MPU6050/Inc
 )
 
 # Add project symbols (macros)

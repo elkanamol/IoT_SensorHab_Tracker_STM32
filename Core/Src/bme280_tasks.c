@@ -25,15 +25,30 @@ struct bme280_data bme_comp_data;
  */
 void StartBme280Task(void *argument)
 {
-    (void)argument;
-
+    SemaphoreHandle_t i2c_mutex = (SemaphoreHandle_t)argument;
+    
+    vTaskDelay(pdMS_TO_TICKS(2000));
     printf("Starting BME280 task...\r\n");
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    
+    if (i2c_mutex == NULL)
+    {
+        printf("BME280: I2C mutex is NULL\r\n");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (xSemaphoreTake(i2c_mutex, portMAX_DELAY) != pdTRUE)
+    {
+        printf("BME280: Failed to take I2C mutex\r\n");
+        vTaskDelete(NULL);
+        return;
+    }
 
     // Initialize BME280 step by step
     if (BME280_InitializeInterface() != BME280_OK)
     {
         printf("BME280 interface initialization failed\r\n");
+        xSemaphoreGive(i2c_mutex);  
         vTaskDelete(NULL);
         return;
     }
@@ -41,6 +56,7 @@ void StartBme280Task(void *argument)
     if (BME280_InitializeSensor() != BME280_OK)
     {
         printf("BME280 sensor initialization failed\r\n");
+        xSemaphoreGive(i2c_mutex);  
         vTaskDelete(NULL);
         return;
     }
@@ -48,6 +64,7 @@ void StartBme280Task(void *argument)
     if (BME280_ConfigureSettings() != BME280_OK)
     {
         printf("BME280 settings configuration failed\r\n");
+        xSemaphoreGive(i2c_mutex);  
         vTaskDelete(NULL);
         return;
     }
@@ -55,10 +72,17 @@ void StartBme280Task(void *argument)
     if (BME280_ValidateFirstMeasurement() != BME280_OK)
     {
         printf("BME280 first measurement validation failed\r\n");
+        xSemaphoreGive(i2c_mutex); 
         vTaskDelete(NULL);
         return;
     }
-
+    
+    if (xSemaphoreGive(i2c_mutex) != pdTRUE)
+    {
+        printf("BME280: Failed to give I2C mutex\r\n");
+        vTaskDelete(NULL);
+        return;
+    }
     printf("BME280 initialization complete, starting measurements\r\n");
 
     // Start main measurement loop
@@ -66,6 +90,12 @@ void StartBme280Task(void *argument)
 
     for (;;)
     {
+        if (xSemaphoreTake(i2c_mutex, portMAX_DELAY) != pdTRUE)
+        {
+            printf("BME280: Failed to take I2C mutex\r\n");
+            continue;
+        }
+        
         // Take forced measurement (power efficient)
         rslt = BME280_TakeForcedMeasurement();
 
@@ -84,7 +114,12 @@ void StartBme280Task(void *argument)
         {
             printf("BME280: Measurement failed, error: %d\r\n", rslt);
         }
-
+        
+        if (xSemaphoreGive(i2c_mutex) != pdTRUE)
+        {
+            printf("BME280: Failed to give I2C mutex\r\n");
+        }
+        
         // Wait before next measurement (1 second interval)
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
@@ -255,17 +290,14 @@ int8_t BME280_TakeForcedMeasurement(void)
  */
 void BME280_PrintMeasurementData(void)
 {
-    // Convert for printf only (since printf doesn't support float)
+    // Convert for integer printing
     bme_calc_data_int_t bme_calc_data;
     convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
-    char temp_str[16], press_str[16], hum_str[16];
 
-    // Use sprintf for float conversion (if supported)
-    sprintf(temp_str, "%d.%02d", (int)bme_comp_data.temperature, (int)((bme_comp_data.temperature - (int)bme_comp_data.temperature) * 100));
-    sprintf(press_str, "%d.%02d", (int)bme_comp_data.pressure, (int)((bme_comp_data.pressure - (int)bme_comp_data.pressure) * 100));
-    sprintf(hum_str, "%d.%02d", (int)bme_comp_data.humidity, (int)((bme_comp_data.humidity - (int)bme_comp_data.humidity) * 100));
-
-    printf("BME280: %s°C, %shPa, %s%%\r\n", temp_str, press_str, hum_str);
+    printf("BME280: %d.%02d°C, %d.%02dhPa, %d.%02d%%\r\n", 
+           (int)bme_calc_data.temp_whole, (int)bme_calc_data.temp_frac,
+           (int)bme_calc_data.press_whole, (int)bme_calc_data.press_frac,
+           (int)bme_calc_data.hum_whole, (int)bme_calc_data.hum_frac);
 }
 
 // /**

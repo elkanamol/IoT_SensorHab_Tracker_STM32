@@ -42,6 +42,7 @@
 #include "w25qxx_hal.h"
 #include "driver_w25qxx_interface.h"
 #include "driver_w25qxx_basic.h"
+#include "mpu6050_task.h"
 
 /* USER CODE END Includes */
 
@@ -218,7 +219,28 @@ int main(void)
 
   BaseType_t TaskStatus;
   // Create the uAT parser task
+  // Create I2C mutex
+  SemaphoreHandle_t g_i2c_mutex = NULL;
 
+  // In main() or initialization function:
+  g_i2c_mutex = xSemaphoreCreateMutex();
+  configASSERT(g_i2c_mutex != NULL);
+  printf("I2C mutex created\n");
+  if (xSemaphoreTake(g_i2c_mutex, portMAX_DELAY) != pdTRUE)
+  {
+    printf("Failed to take I2C mutex\n");
+    Error_Handler();
+  }
+  printf("I2C mutex taken\n");
+  if (xSemaphoreGive(g_i2c_mutex) != pdTRUE)
+  {
+    printf("Failed to give I2C mutex\n");
+    Error_Handler();
+  }
+  printf("I2C mutex given\n");
+
+
+  // Create uAT parser task
   TaskStatus = xTaskCreate(uAT_Task,
                            "uAT_Task",
                            512, // stack depth in words
@@ -249,11 +271,21 @@ int main(void)
   TaskStatus = xTaskCreate(StartBme280Task,
                            "BME280_Task",
                            512, // Adjust stack size as needed
-                           NULL,
+                           (void *)g_i2c_mutex,
                            tskIDLE_PRIORITY + 1,
                            NULL);
   configASSERT(TaskStatus == pdPASS);
   printf("BME280 task created\n");
+  // Create MPU6050 task
+  TaskStatus = xTaskCreate(MPU6050_Task_Start,
+                           "MPU6050",
+                           512,
+                           (void *)g_i2c_mutex,
+                           tskIDLE_PRIORITY + 1,
+                           NULL);
+  configASSERT(TaskStatus == pdPASS);
+  printf("MPU6050 task created\n");
+
 
   // Create the Data Logger task
   TaskStatus = xTaskCreate(StartDataLoggerTask,
