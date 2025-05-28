@@ -3,72 +3,41 @@
 #include "stdio.h"
 #include "string.h"
 #include "stdbool.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
 
-// Private variables (internal to this module)
+// Private variables
 static uint32_t ring_buffer_write_address = RING_BUFFER_START_ADDRESS;
 static uint32_t total_records_written = 0;
+static uint32_t record_counter = 0;
 
-// Sector-based variables
-static uint8_t sector_buffer[SECTOR_BUFFER_SIZE];  // 4KB buffer instead of 256B
-static uint16_t records_in_buffer = 0;             // uint16_t for larger count (~256 records)
+// Unified sector buffer
+static uint8_t sector_buffer[SECTOR_BUFFER_SIZE];
+static uint16_t records_in_buffer = 0;
 static uint32_t current_sector_address = RING_BUFFER_START_ADDRESS;
 
+// Current sensor data (updated by different sensors)
+static SensorData_Combined_t current_sensor_data = {0};
+static TickType_t last_mqtt_transmission = 0;
+static TickType_t last_flash_save = 0;
 
-// Public variables (accessible from other modules)
+// Public variables
 QueueHandle_t xDataLoggerQueue = NULL;
+QueueHandle_t xMQTTQueue = NULL;
 
 // Private function prototypes
 static uint8_t DataLogger_Initialize(void);
 static void DataLogger_FindWritePosition(void);
-static void DataLogger_ProcessMessage(LogMessage_t *message);
-static void DataLogger_AddRecordToBuffer(BME280_Record_t *record);
+static void DataLogger_ProcessSensorUpdate(SensorUpdateMessage_t *message);
+static void DataLogger_SaveCurrentDataToFlash(void);
 static void DataLogger_FlushSectorBuffer(void);
 static void DataLogger_PeriodicMaintenance(void);
-static void DataLogger_PrintConfiguration(void);
 static void DataLogger_PrintStatus(void);
-static void DataLogger_Shutdown(void);
-static uint32_t DataLogger_CalculateCRC(BME280_Record_t *record);
-
-/**
- * @brief DataLogger FreeRTOS Task
- */
-void StartDataLoggerTask(void *argument)
-{
-    (void)argument;
-    LogMessage_t received_message;
-    
-    // vTaskDelay(pdMS_TO_TICKS(1000));
-    printf("Data Logger Task starting with Queue-based architecture...\r\n");
-    
-    // Initialize all subsystems
-    if (DataLogger_Initialize() != 0) {
-        printf("Failed to initialize Data Logger\r\n");
-        vTaskDelete(NULL);
-        return;
-    }
-    
-    printf("Data Logger initialized successfully\r\n");
-    DataLogger_PrintConfiguration();
-    
-    // Main processing loop
-    for (;;)
-    {
-        // Wait for messages from other tasks
-        if (xQueueReceive(xDataLoggerQueue, &received_message, pdMS_TO_TICKS(MAX_QUEUE_WAIT_MS)) == pdTRUE)
-        {
-            // Process received message
-            DataLogger_ProcessMessage(&received_message);
-        }
-        else
-        {
-            // Timeout - perform periodic maintenance
-            DataLogger_PeriodicMaintenance();
-        }
-    }
-    
-    // Cleanup (won't be reached)
-    DataLogger_Shutdown();
-}
+static uint32_t DataLogger_CalculateCRC(SensorData_Combined_t *record);
+static void DataLogger_InitializeRecord(SensorData_Combined_t *record);
+static void DataLogger_CheckPeriodicSave(void);
+static void DataLogger_CheckMQTTTransmission(void);
 
 /**
  * @brief Initialize Data Logger subsystem
@@ -79,10 +48,19 @@ static uint8_t DataLogger_Initialize(void)
     uint8_t flash_status;
     uint8_t manufacturer, device_id;
     
-    // Create queue for receiving data from other tasks
-    xDataLoggerQueue = xQueueCreate(DATA_LOGGER_QUEUE_SIZE, sizeof(LogMessage_t));
+    printf("DataLogger: Initializing unified sensor logging system...\r\n");
+    
+    // Create data logger queue
+    xDataLoggerQueue = xQueueCreate(DATA_LOGGER_QUEUE_SIZE, sizeof(SensorUpdateMessage_t));
     if (xDataLoggerQueue == NULL) {
-        printf("Failed to create data logger queue\r\n");
+        printf("DataLogger: Failed to create data logger queue\r\n");
+        return 1;
+    }
+    
+    // Create MQTT queue
+    xMQTTQueue = xQueueCreate(5, sizeof(SensorData_Combined_t));
+    if (xMQTTQueue == NULL) {
+        printf("DataLogger: Failed to create MQTT queue\r\n");
         return 1;
     }
     
@@ -93,120 +71,290 @@ static uint8_t DataLogger_Initialize(void)
     // Initialize W25Q64 flash
     flash_status = w25qxx_basic_init(W25Q64, W25QXX_INTERFACE_SPI, W25QXX_BOOL_FALSE);
     if (flash_status != 0) {
-        printf("Failed to initialize W25Q64 flash (err=%d)\r\n", flash_status);
+        printf("DataLogger: Failed to initialize W25Q64 flash (err=%d)\r\n", flash_status);
         return 1;
     }
     
     // Verify chip ID
     flash_status = w25qxx_basic_get_id(&manufacturer, &device_id);
     if (flash_status == 0) {
-        printf("W25Q64: manufacturer=0x%02X, device_id=0x%02X\r\n", manufacturer, device_id);
+        printf("DataLogger: W25Q64 ID - manufacturer=0x%02X, device=0x%02X\r\n", manufacturer, device_id);
         if (manufacturer != 0xEF || device_id != 0x16) {
-            printf("Warning: Unexpected chip ID\r\n");
+            printf("DataLogger: Warning - Unexpected chip ID\r\n");
         }
     }
     
     // Find current write position in ring buffer
     DataLogger_FindWritePosition();
     
+    printf("DataLogger: Initialization complete\r\n");
     return 0;
 }
 
 /**
- * @brief Find current write position in ring buffer
+ * @brief Initialize a record with default values and 0xFF padding
  */
-static void DataLogger_FindWritePosition(void)
+static void DataLogger_InitializeRecord(SensorData_Combined_t *record)
 {
-    printf("Scanning 64KB ring buffer for write position...\r\n");
-    BME280_Record_t scan_record;
-    bool found_empty = false;
+    // Clear the entire structure
+    memset(record, 0xFF, sizeof(SensorData_Combined_t));
     
-    // Scan by sectors instead of pages
-    for (uint32_t addr = RING_BUFFER_START_ADDRESS; 
-         addr < RING_BUFFER_END_ADDRESS; 
-         addr += W25Q64_SECTOR_SIZE)  // 4KB increments instead of 256B
-    {
-        uint8_t status = w25qxx_basic_read(addr, (uint8_t *)&scan_record, sizeof(BME280_Record_t));
-        if (status == 0 && scan_record.timestamp == 0xFFFFFFFF) {
-            current_sector_address = addr;
-            ring_buffer_write_address = addr;
-            found_empty = true;
-            printf("Found empty sector at 0x%08lX\r\n", addr);
-            break;
-        }
-    }
-    
-    if (!found_empty) {
-        printf("Ring buffer full, starting FIFO from beginning\r\n");
-        current_sector_address = RING_BUFFER_START_ADDRESS;
-        ring_buffer_write_address = RING_BUFFER_START_ADDRESS;
-    }
+    // Set default values for non-0xFF fields
+    record->timestamp = 0;
+    record->record_id = 0;
+    record->bme_temperature = 0.0f;
+    record->bme_pressure = 0.0f;
+    record->bme_humidity = 0.0f;
+    record->bme_valid = 0;
+    record->mpu_accel_x = 0.0f;
+    record->mpu_accel_y = 0.0f;
+    record->mpu_accel_z = 0.0f;
+    record->mpu_gyro_x = 0.0f;
+    record->mpu_gyro_y = 0.0f;
+    record->mpu_gyro_z = 0.0f;
+    record->mpu_temperature = 0.0f;
+    record->mpu_valid = 0;
+    record->crc = 0;
 }
 
 /**
- * @brief Process received message
+ * @brief Calculate CRC for unified record
  */
-static void DataLogger_ProcessMessage(LogMessage_t *message)
+static uint32_t DataLogger_CalculateCRC(SensorData_Combined_t *record)
 {
-    BME280_Record_t record;
+    uint32_t crc = 0;
+    uint8_t *data = (uint8_t *)record;
+    size_t len = sizeof(SensorData_Combined_t) - sizeof(uint32_t) - 16; // Exclude CRC and reserved
     
-    switch (message->type)
-    {
-        case LOG_MSG_BME280_DATA:
-            // Use original float data directly (no conversion needed!)
-            record.timestamp = message->timestamp;
-            record.temperature = message->data.bme_data.temperature;
-            record.pressure = message->data.bme_data.pressure;
-            record.humidity = message->data.bme_data.humidity;
-            record.crc = DataLogger_CalculateCRC(&record);
-            
-            // printf("Logging BME280: T=%.2f°C, P=%.2fhPa, H=%.2f%%\r\n",
-            //        record.temperature, record.pressure, record.humidity);
-            
-            DataLogger_AddRecordToBuffer(&record);
-            break;
-            
-        case LOG_MSG_SYSTEM_EVENT:
-            printf("System Event: %s\r\n", message->data.system_event);
-            // Could log system events to flash as well
-            break;
-            
-        case LOG_MSG_MQTT_STATUS:
-            printf("MQTT Status: %d\r\n", message->data.mqtt_status);
-            break;
-            
-        default:
-            printf("Unknown message type: %d\r\n", message->type);
-            break;
+    for (size_t i = 0; i < len; i++) {
+        crc += data[i];
     }
+    return crc;
 }
 
 /**
- * @brief Add record to page buffer with ring buffer management
+ * @brief Save current sensor data to flash
  */
-static void DataLogger_AddRecordToBuffer(BME280_Record_t *record)
+static void DataLogger_SaveCurrentDataToFlash(void)
 {
-    // Copy to sector buffer at correct offset
-    uint32_t offset = records_in_buffer * sizeof(BME280_Record_t);
-    memcpy(&sector_buffer[offset], record, sizeof(BME280_Record_t));
+    SensorData_Combined_t record_to_save;
+    
+    // Copy current data
+    record_to_save = current_sensor_data;
+    
+    // Update record metadata
+    record_to_save.timestamp = HAL_GetTick();
+    record_to_save.record_id = ++record_counter;
+    
+    // Fill reserved area with 0xFF
+    memset(record_to_save.reserved, 0xFF, sizeof(record_to_save.reserved));
+    
+    // Calculate CRC
+    record_to_save.crc = DataLogger_CalculateCRC(&record_to_save);
+    
+    // Add to sector buffer
+    uint32_t offset = records_in_buffer * sizeof(SensorData_Combined_t);
+    memcpy(&sector_buffer[offset], &record_to_save, sizeof(SensorData_Combined_t));
     records_in_buffer++;
+    
+    // printf("DataLogger: Saved record #%lu - BME280(%s) MPU6050(%s)\r\n", 
+    //        record_to_save.record_id,
+    //        record_to_save.bme_valid ? "Valid" : "Invalid",
+    //        record_to_save.mpu_valid ? "Valid" : "Invalid");
     
     // Flush when sector buffer is full
     if (records_in_buffer >= RECORDS_PER_SECTOR) {
-        DataLogger_FlushSectorBuffer();  // New function name
+        DataLogger_FlushSectorBuffer();
+    }
+    
+    last_flash_save = xTaskGetTickCount();
+}
+
+/**
+ * @brief Update BME280 data in current sensor data
+ */
+BaseType_t DataLogger_UpdateBME280Data(struct bme280_data *bme_data)
+{
+    SensorUpdateMessage_t message = {
+        .type = SENSOR_UPDATE_BME280,
+        .timestamp = HAL_GetTick(),
+        .data.bme_data = *bme_data
+    };
+
+    return xQueueSend(xDataLoggerQueue, &message, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS));
+}
+
+/**
+ * @brief Update MPU6050 data in current sensor data
+ */
+BaseType_t DataLogger_UpdateMPU6050Data(float ax, float ay, float az, float gx, float gy, float gz, float temp)
+{
+    SensorUpdateMessage_t message = {
+        .type = SENSOR_UPDATE_MPU6050,
+        .timestamp = HAL_GetTick(),
+        .data.mpu_data = {
+            .accel_x = ax, .accel_y = ay, .accel_z = az,
+            .gyro_x = gx, .gyro_y = gy, .gyro_z = gz,
+            .temperature = temp
+        }
+    };
+
+    return xQueueSend(xDataLoggerQueue, &message, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS));
+}
+
+/**
+ * @brief Force save current data to flash
+ */
+BaseType_t DataLogger_ForceSave(void)
+{
+    SensorUpdateMessage_t message = {
+        .type = SENSOR_UPDATE_FORCE_SAVE,
+        .timestamp = HAL_GetTick()
+    };
+
+    return xQueueSend(xDataLoggerQueue, &message, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS));
+}
+
+/**
+ * @brief Process sensor update messages
+ */
+static void DataLogger_ProcessSensorUpdate(SensorUpdateMessage_t *message)
+{
+    switch (message->type)
+    {
+        case SENSOR_UPDATE_BME280:
+            // Update BME280 data in current record
+            current_sensor_data.bme_temperature = message->data.bme_data.temperature;
+            current_sensor_data.bme_pressure = message->data.bme_data.pressure;
+            current_sensor_data.bme_humidity = message->data.bme_data.humidity;
+            current_sensor_data.bme_valid = 1;
+            
+            // printf("DataLogger: BME280 data updated\r\n");
+            break;
+            
+        case SENSOR_UPDATE_MPU6050:
+            // Update MPU6050 data in current record
+            current_sensor_data.mpu_accel_x = message->data.mpu_data.accel_x;
+            current_sensor_data.mpu_accel_y = message->data.mpu_data.accel_y;
+            current_sensor_data.mpu_accel_z = message->data.mpu_data.accel_z;
+            current_sensor_data.mpu_gyro_x = message->data.mpu_data.gyro_x;
+            current_sensor_data.mpu_gyro_y = message->data.mpu_data.gyro_y;
+            current_sensor_data.mpu_gyro_z = message->data.mpu_data.gyro_z;
+            current_sensor_data.mpu_temperature = message->data.mpu_data.temperature;
+            current_sensor_data.mpu_valid = 1;
+            
+            // printf("DataLogger: MPU6050 data updated\r\n");
+            break;
+            
+        case SENSOR_UPDATE_FORCE_SAVE:
+            DataLogger_SaveCurrentDataToFlash();
+            break;
+            
+        case SENSOR_UPDATE_SYSTEM_EVENT:
+            printf("System Event: %s\r\n", message->data.system_event);
+            break;
+            
+        default:
+            printf("DataLogger: Unknown update type: %d\r\n", message->type);
+            break;
     }
 }
 
 /**
- * @brief Flush page buffer with 64KB ring buffer management
+ * @brief Check if it's time for periodic save (every 10 seconds if data is available)
+ */
+static void DataLogger_CheckPeriodicSave(void)
+{
+    TickType_t current_time = xTaskGetTickCount();
+    
+    // Save every 10 seconds if we have valid data
+    if ((current_time - last_flash_save) >= pdMS_TO_TICKS(1000) && 
+        (current_sensor_data.bme_valid || current_sensor_data.mpu_valid))
+    {
+        DataLogger_SaveCurrentDataToFlash();
+    }
+}
+
+/**
+ * @brief Check if it's time to send MQTT data (every 60 seconds)
+ */
+static void DataLogger_CheckMQTTTransmission(void)
+{
+    TickType_t current_time = xTaskGetTickCount();
+    
+    if ((current_time - last_mqtt_transmission) >= pdMS_TO_TICKS(MQTT_TRANSMISSION_INTERVAL_MS))
+    {
+        if (xMQTTQueue != NULL && (current_sensor_data.bme_valid || current_sensor_data.mpu_valid))
+        {
+            if (xQueueSend(xMQTTQueue, &current_sensor_data, 0) == pdTRUE)
+            {
+                // printf("DataLogger: Sent combined sensor data to MQTT queue\r\n");
+                last_mqtt_transmission = current_time;
+            }
+            else
+            {
+                printf("DataLogger: Failed to send to MQTT queue (queue full)\r\n");
+            }
+        }
+    }
+}
+
+/**
+ * @brief Main DataLogger task
+ */
+void StartDataLoggerTask(void *argument)
+{
+    (void)argument;
+    SensorUpdateMessage_t received_message;
+    
+    printf("DataLogger: Starting unified sensor data logging system...\r\n");
+    
+    // Initialize system
+    if (DataLogger_Initialize() != 0) {
+        printf("DataLogger: Failed to initialize\r\n");
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    // Initialize current sensor data
+    DataLogger_InitializeRecord(&current_sensor_data);
+    
+    // Initialize timing
+    last_flash_save = xTaskGetTickCount();
+    last_mqtt_transmission = xTaskGetTickCount();
+    
+    printf("DataLogger: Unified system initialized successfully\r\n");
+    
+    // Main processing loop
+    for (;;)
+    {
+        // Wait for sensor updates
+        if (xQueueReceive(xDataLoggerQueue, &received_message, pdMS_TO_TICKS(MAX_QUEUE_WAIT_MS)) == pdTRUE)
+        {
+            DataLogger_ProcessSensorUpdate(&received_message);
+        }
+        else
+        {
+            // Timeout - perform periodic tasks
+            DataLogger_PeriodicMaintenance();
+        }
+        
+        // Check for periodic save and MQTT transmission
+        DataLogger_CheckPeriodicSave();
+        DataLogger_CheckMQTTTransmission();
+    }
+}
+
+/**
+ * @brief Flush sector buffer to flash with ring buffer management
  */
 static void DataLogger_FlushSectorBuffer(void)
 {
     if (records_in_buffer == 0) return;
     
-    uint32_t used_bytes = records_in_buffer * sizeof(BME280_Record_t);
+    uint32_t used_bytes = records_in_buffer * sizeof(SensorData_Combined_t);
     
-    printf("Flushing 4KB sector: %d records (%lu bytes) at 0x%08lX\r\n", 
+    printf("DataLogger: Flushing sector: %d records (%lu bytes) at 0x%08lX\r\n", 
            records_in_buffer, used_bytes, current_sector_address);
     
     // Fill remaining buffer with 0xFF
@@ -214,21 +362,21 @@ static void DataLogger_FlushSectorBuffer(void)
         memset(&sector_buffer[used_bytes], 0xFF, SECTOR_BUFFER_SIZE - used_bytes);
     }
     
-    // Write entire 4KB sector - MUCH more efficient!
+    // Write entire 4KB sector
     uint8_t status = w25qxx_basic_write(current_sector_address, 
                                         sector_buffer, 
-                                        SECTOR_BUFFER_SIZE);  // 4096 bytes instead of 256
+                                        SECTOR_BUFFER_SIZE);
     
     if (status == 0) {
         total_records_written += records_in_buffer;
         
-        // Advance to next 4KB sector
+        // Advance to next sector
         current_sector_address += SECTOR_BUFFER_SIZE;
         ring_buffer_write_address = current_sector_address;
         
-        // Ring buffer wrap-around (64KB FIFO)
+        // Ring buffer wrap-around
         if (current_sector_address >= RING_BUFFER_END_ADDRESS) {
-            printf("Ring buffer full (64KB), wrapping to start (FIFO)\r\n");
+            printf("DataLogger: Ring buffer full, wrapping to start (FIFO)\r\n");
             current_sector_address = RING_BUFFER_START_ADDRESS;
             ring_buffer_write_address = RING_BUFFER_START_ADDRESS;
         }
@@ -237,9 +385,40 @@ static void DataLogger_FlushSectorBuffer(void)
         records_in_buffer = 0;
         memset(sector_buffer, 0xFF, sizeof(sector_buffer));
         
-        printf("4KB sector written successfully\r\n");
+        // printf("DataLogger: Sector written successfully\r\n");
     } else {
-        printf("Sector write failed (err=%d)\r\n", status);
+        printf("DataLogger: Sector write failed (err=%d)\r\n", status);
+    }
+}
+
+/**
+ * @brief Find current write position in ring buffer
+ */
+static void DataLogger_FindWritePosition(void)
+{
+    // printf("DataLogger: Scanning ring buffer for write position...\r\n");
+    SensorData_Combined_t scan_record;
+    bool found_empty = false;
+    
+    // Scan by sectors
+    for (uint32_t addr = RING_BUFFER_START_ADDRESS; 
+         addr < RING_BUFFER_END_ADDRESS; 
+         addr += W25Q64_SECTOR_SIZE)
+    {
+        uint8_t status = w25qxx_basic_read(addr, (uint8_t *)&scan_record, sizeof(SensorData_Combined_t));
+        if (status == 0 && scan_record.timestamp == 0xFFFFFFFF) {
+            current_sector_address = addr;
+            ring_buffer_write_address = addr;
+            found_empty = true;
+            printf("DataLogger: Found empty sector at 0x%08lX\r\n", addr);
+            break;
+        }
+    }
+    
+    if (!found_empty) {
+        printf("DataLogger: Ring buffer full, starting FIFO from beginning\r\n");
+        current_sector_address = RING_BUFFER_START_ADDRESS;
+        ring_buffer_write_address = RING_BUFFER_START_ADDRESS;
     }
 }
 
@@ -251,118 +430,109 @@ static void DataLogger_PeriodicMaintenance(void)
     static uint32_t maintenance_counter = 0;
     maintenance_counter++;
     
-    //Force flush every 60 seconds instead of 30 (larger buffer)
+    // Force flush every 60 seconds if we have buffered records
     if (maintenance_counter % 60 == 0 && records_in_buffer > 0) {
-        printf("Periodic maintenance: flushing %d buffered records\r\n", records_in_buffer);
-        DataLogger_FlushSectorBuffer();  // Updated function name
+        printf("DataLogger: Periodic maintenance - flushing %d buffered records\r\n", records_in_buffer);
+        DataLogger_FlushSectorBuffer();
     }
     
-    // Print status every 120 seconds instead of 60
+    // Print status every 120 seconds
     if (maintenance_counter % 120 == 0) {
         DataLogger_PrintStatus();
     }
 }
 
 /**
- * @brief Print current configuration
- */
-static void DataLogger_PrintConfiguration(void)
-{
-    printf("\r\n=== Data Logger Configuration (4KB Sector Buffering) ===\r\n");
-    printf("Ring Buffer Size: %d KB\r\n", FLASH_RING_BUFFER_SIZE / 1024);
-    printf("Ring Buffer Range: 0x%08lX - 0x%08lX\r\n", 
-           (uint32_t)RING_BUFFER_START_ADDRESS, (uint32_t)RING_BUFFER_END_ADDRESS);
-    printf("Queue Size: %d messages\r\n", DATA_LOGGER_QUEUE_SIZE);
-    printf("Records per Sector: %d\r\n", RECORDS_PER_SECTOR);
-    printf("Sector Buffer Size: %d bytes\r\n", SECTOR_BUFFER_SIZE);
-    
-    printf("Total Ring Buffer Capacity: %d records\r\n", 
-           FLASH_RING_BUFFER_SIZE / (int)sizeof(BME280_Record_t));
-    printf("=======================================================\r\n\r\n");
-}
-
-/**
- * @brief Print current status
+ * @brief Print current datalogger status
  */
 static void DataLogger_PrintStatus(void)
 {
-    printf("\r\n=== Data Logger Status ===\r\n");
-    printf("Ring Buffer Write Address: 0x%08lX\r\n", ring_buffer_write_address);
-    printf("Current Sector Address: 0x%08lX\r\n", current_sector_address);
+    printf("\r\n=== DataLogger Status ===\r\n");
+    printf("Write Address: 0x%08lX\r\n", ring_buffer_write_address);
+    printf("Current Sector: 0x%08lX\r\n", current_sector_address);
     printf("Records in Buffer: %d/%d\r\n", records_in_buffer, RECORDS_PER_SECTOR);
     printf("Total Records Written: %lu\r\n", total_records_written);
-    printf("Ring Buffer Usage: %.1f%%\r\n", 
-           ((float)(ring_buffer_write_address - RING_BUFFER_START_ADDRESS) / FLASH_RING_BUFFER_SIZE) * 100.0f);
-    printf("=========================\r\n\r\n");
+    printf("Current Record ID: %lu\r\n", record_counter);
+    printf("BME280 Valid: %s\r\n", current_sensor_data.bme_valid ? "Yes" : "No");
+    printf("MPU6050 Valid: %s\r\n", current_sensor_data.mpu_valid ? "Yes" : "No");
+    printf("==========================\r\n\r\n");
 }
 
 /**
- * @brief Shutdown data logger
+ * @brief Convert combined sensor float data to integer representation
+ * @param float_data Pointer to float combined data structure
+ * @param int_data Pointer to integer combined data structure to fill
  */
-static void DataLogger_Shutdown(void)
+void convert_combined_sensor_data_to_int(const SensorData_Combined_t *float_data, SensorData_Combined_Int_t *int_data)
 {
-    printf("Data Logger shutting down...\r\n");
-    
-    // Force flush any remaining buffered data
-    if (records_in_buffer > 0) {
-        printf("Flushing %d remaining records\r\n", records_in_buffer);
-        DataLogger_FlushSectorBuffer();  // Updated function name
+    if (float_data == NULL || int_data == NULL) {
+        return;
     }
     
-    // Deinitialize flash
-    w25qxx_basic_deinit();
-    
-    // Delete queue if it exists
-    if (xDataLoggerQueue != NULL) {
-        vQueueDelete(xDataLoggerQueue);
-        xDataLoggerQueue = NULL;
+    // Convert BME280 data (same as your existing conversion)
+    if (float_data->bme_valid) {
+        int_data->bme_temp_whole = (int32_t)float_data->bme_temperature;
+        int_data->bme_temp_frac = (int32_t)((float_data->bme_temperature - int_data->bme_temp_whole) * 100);
+        if (int_data->bme_temp_frac < 0) int_data->bme_temp_frac = -int_data->bme_temp_frac;
+        
+        int_data->bme_press_whole = (uint32_t)float_data->bme_pressure;
+        int_data->bme_press_frac = (uint32_t)((float_data->bme_pressure - int_data->bme_press_whole) * 100);
+        
+        int_data->bme_hum_whole = (uint32_t)float_data->bme_humidity;
+        int_data->bme_hum_frac = (uint32_t)((float_data->bme_humidity - int_data->bme_hum_whole) * 100);
+        
+        int_data->bme_valid = 1;
+    } else {
+        int_data->bme_temp_whole = 0; int_data->bme_temp_frac = 0;
+        int_data->bme_press_whole = 0; int_data->bme_press_frac = 0;
+        int_data->bme_hum_whole = 0; int_data->bme_hum_frac = 0;
+        int_data->bme_valid = 0;
     }
     
-    printf("Data Logger shutdown complete\r\n");
-}
-
-/**
- * @brief Calculate CRC32 for record integrity
- */
-static uint32_t DataLogger_CalculateCRC(BME280_Record_t *record)
-{
-    // Simple CRC calculation (implement proper CRC32 if needed)
-    uint32_t crc = 0;
-    uint8_t *data = (uint8_t *)record;
-    size_t len = sizeof(BME280_Record_t) - sizeof(uint32_t); // Exclude CRC field
-    
-    for (size_t i = 0; i < len; i++) {
-        crc += data[i];
+    // Convert MPU6050 data
+    if (float_data->mpu_valid) {
+        // Accelerometer (g) - 3 decimal places
+        int_data->mpu_accel_x_whole = (int16_t)float_data->mpu_accel_x;
+        int_data->mpu_accel_x_frac = (int16_t)((float_data->mpu_accel_x - int_data->mpu_accel_x_whole) * 1000);
+        if (int_data->mpu_accel_x_frac < 0) int_data->mpu_accel_x_frac = -int_data->mpu_accel_x_frac;
+        
+        int_data->mpu_accel_y_whole = (int16_t)float_data->mpu_accel_y;
+        int_data->mpu_accel_y_frac = (int16_t)((float_data->mpu_accel_y - int_data->mpu_accel_y_whole) * 1000);
+        if (int_data->mpu_accel_y_frac < 0) int_data->mpu_accel_y_frac = -int_data->mpu_accel_y_frac;
+        
+        int_data->mpu_accel_z_whole = (int16_t)float_data->mpu_accel_z;
+        int_data->mpu_accel_z_frac = (int16_t)((float_data->mpu_accel_z - int_data->mpu_accel_z_whole) * 1000);
+        if (int_data->mpu_accel_z_frac < 0) int_data->mpu_accel_z_frac = -int_data->mpu_accel_z_frac;
+        
+        // Gyroscope (dps) - 2 decimal places
+        int_data->mpu_gyro_x_whole = (int16_t)float_data->mpu_gyro_x;
+        int_data->mpu_gyro_x_frac = (int16_t)((float_data->mpu_gyro_x - int_data->mpu_gyro_x_whole) * 100);
+        if (int_data->mpu_gyro_x_frac < 0) int_data->mpu_gyro_x_frac = -int_data->mpu_gyro_x_frac;
+        
+        int_data->mpu_gyro_y_whole = (int16_t)float_data->mpu_gyro_y;
+        int_data->mpu_gyro_y_frac = (int16_t)((float_data->mpu_gyro_y - int_data->mpu_gyro_y_whole) * 100);
+        if (int_data->mpu_gyro_y_frac < 0) int_data->mpu_gyro_y_frac = -int_data->mpu_gyro_y_frac;
+        
+        int_data->mpu_gyro_z_whole = (int16_t)float_data->mpu_gyro_z;
+        int_data->mpu_gyro_z_frac = (int16_t)((float_data->mpu_gyro_z - int_data->mpu_gyro_z_whole) * 100);
+        if (int_data->mpu_gyro_z_frac < 0) int_data->mpu_gyro_z_frac = -int_data->mpu_gyro_z_frac;
+        
+        // Temperature (°C) - 2 decimal places
+        int_data->mpu_temp_whole = (int16_t)float_data->mpu_temperature;
+        int_data->mpu_temp_frac = (int16_t)((float_data->mpu_temperature - int_data->mpu_temp_whole) * 100);
+        if (int_data->mpu_temp_frac < 0) int_data->mpu_temp_frac = -int_data->mpu_temp_frac;
+        
+        int_data->mpu_valid = 1;
+    } else {
+        int_data->mpu_accel_x_whole = 0; int_data->mpu_accel_x_frac = 0;
+        int_data->mpu_accel_y_whole = 0; int_data->mpu_accel_y_frac = 0;
+        int_data->mpu_accel_z_whole = 0; int_data->mpu_accel_z_frac = 0;
+        int_data->mpu_gyro_x_whole = 0; int_data->mpu_gyro_x_frac = 0;
+        int_data->mpu_gyro_y_whole = 0; int_data->mpu_gyro_y_frac = 0;
+        int_data->mpu_gyro_z_whole = 0; int_data->mpu_gyro_z_frac = 0;
+        int_data->mpu_temp_whole = 0; int_data->mpu_temp_frac = 0;
+        int_data->mpu_valid = 0;
     }
-    return crc;
-}
-
-/**
- * @brief Send BME280 data to logger (called from BME280 task)
- */
-BaseType_t DataLogger_QueueBME280Data(struct bme280_data *bme_data)
-{
-    LogMessage_t message = {
-        .type = LOG_MSG_BME280_DATA,
-        .timestamp = HAL_GetTick(),
-        .data.bme_data = *bme_data  // Use original float values!
-    };
-
-    return xQueueSend(xDataLoggerQueue, &message, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS));
-}
-
-/**
- * @brief Send system event to logger
- */
-BaseType_t DataLogger_QueueSystemEvent(const char *event_text)
-{
-    LogMessage_t message = {
-        .type = LOG_MSG_SYSTEM_EVENT,
-        .timestamp = HAL_GetTick()
-    };
     
-    strncpy(message.data.system_event, event_text, sizeof(message.data.system_event) - 1);
-    message.data.system_event[sizeof(message.data.system_event) - 1] = '\0';
-
-    return xQueueSend(xDataLoggerQueue, &message, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS));
+    int_data->timestamp = float_data->timestamp;
 }

@@ -426,6 +426,8 @@ static void MQTT_Task(void *argument)
 {
   RC76XX_Result_t res;
   TickType_t delay = pdMS_TO_TICKS(20000);
+  SensorData_Combined_t sensor_data;
+  SensorData_Combined_Int_t sensor_int_data;
 
   // Register all URC handlers
   res = RC76XX_RegisterURCHandlers(&mqttHandle);
@@ -466,11 +468,7 @@ static void MQTT_Task(void *argument)
   }
   printf("Network ready, IP=%s\r\n", mqttHandle.ip);
 
-  // /* 3) Configure MQTT */
-  // const char *broker = "broker.hivemq.com";
-  // const char *clientID = "QCX216";
-  // const char *user = "";
-  // const char *pass = "";
+  /* 3) Configure MQTT */
   const char *broker = "mqtt3.thingspeak.com";
   const uint16_t port = 1883;
   const char *clientID = SECRET_MQTT_CLIENT_ID;
@@ -479,8 +477,7 @@ static void MQTT_Task(void *argument)
   const char *subTopic = "channels/2956054/subscribe";
   const char *pubTopic = "channels/2956054/publish";
 
-  printf("Configuring MQTT %s:%u, ClientID=%s...\r\n",
-         broker, 1883, clientID);
+  printf("Configuring MQTT %s:%u, ClientID=%s...\r\n", broker, port, clientID);
   res = RC76XX_ConfigMQTT(&mqttHandle, broker, port, clientID, pubTopic, user, pass, false, false, 120);
   if (res != RC76XX_OK)
   {
@@ -500,10 +497,7 @@ static void MQTT_Task(void *argument)
   vTaskDelay(delay);
   printf("MQTT connected\r\n");
 
-  printf("Registered +KMQTT_DATA handler\r\n");
   /* Subscribe to a topic */
-
-  // const char *subTopic = "home/LWTMessage";
   printf("Subscribing to %s...\r\n", subTopic);
   res = RC76XX_Subscribe(&mqttHandle, subTopic);
   if (res == RC76XX_OK)
@@ -514,43 +508,75 @@ static void MQTT_Task(void *argument)
   {
     printf("Subscribe failed: %d\r\n", res);
   }
+
+  // Main MQTT transmission loop
   for (;;)
   {
-
-    // uint32_t now = HAL_GetTick();
-    /* Publish a message */
-    // const char *pubTopic = "home/LWTMessage";
-    // Format BME280 data into MQTT payload for ThingSpeak
-    char payload[100]; // Make sure this is large enough for your payload
-    bme_calc_data_int_t bme_calc_data;
-
-    // // Convert floating-point values to integer components
-    convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
-
-    // Format the payload
-    sprintf(payload, "field1=%ld.%02ld&field2=%lu.%02lu&field3=%lu.%02lu",
-            bme_calc_data.temp_whole, bme_calc_data.temp_frac,
-            bme_calc_data.press_whole, bme_calc_data.press_frac,
-            bme_calc_data.hum_whole, bme_calc_data.hum_frac);
-
-    printf("MQTT Payload: %s\r\n", payload);
-    printf("Publishing to %s: %s\r\n", pubTopic, payload);
-    res = RC76XX_Publish(&mqttHandle, pubTopic, payload);
-    if (res == RC76XX_OK)
+    // Wait for sensor data from DataLogger queue (60-second interval)
+    if (xMQTTQueue != NULL &&
+        xQueueReceive(xMQTTQueue, &sensor_data, pdMS_TO_TICKS(65000)) == pdTRUE)
     {
-      printf("Publish OK\r\n");
+      // Convert to integer representation
+      convert_combined_sensor_data_to_int(&sensor_data, &sensor_int_data);
+
+      // Format payload for ThingSpeak with both BME280 and MPU6050 data
+      char payload[300];
+
+      // Build payload with available sensor data
+      snprintf(payload, sizeof(payload),
+               "field1=%ld.%02ld&field2=%lu.%02lu&field3=%lu.%02lu&field4=%d.%03d&field5=%d.%03d&field6=%d.%03d&field7=%d.%02d&field8=%d.%02d",
+               // BME280 data (fields 1-3)
+               sensor_int_data.bme_temp_whole, sensor_int_data.bme_temp_frac,   // Temperature
+               sensor_int_data.bme_press_whole, sensor_int_data.bme_press_frac, // Pressure
+               sensor_int_data.bme_hum_whole, sensor_int_data.bme_hum_frac,     // Humidity
+               // MPU6050 data (fields 4-8)
+               sensor_int_data.mpu_accel_x_whole, sensor_int_data.mpu_accel_x_frac, // Accel X
+               sensor_int_data.mpu_accel_y_whole, sensor_int_data.mpu_accel_y_frac, // Accel Y
+               sensor_int_data.mpu_accel_z_whole, sensor_int_data.mpu_accel_z_frac, // Accel Z
+               sensor_int_data.mpu_gyro_x_whole, sensor_int_data.mpu_gyro_x_frac,   // Gyro X
+               sensor_int_data.mpu_gyro_y_whole, sensor_int_data.mpu_gyro_y_frac    // Gyro Y
+      );
+      // snprintf(payload, sizeof(payload),
+      //          "field1=%ld.%02ld&field2=%lu.%02lu&field3=%lu.%02lu&field4=%d.%03d&field5=%d.%02d",
+      //          // BME280 (fields 1-3)
+      //          sensor_int_data.bme_temp_whole, sensor_int_data.bme_temp_frac,
+      //          sensor_int_data.bme_press_whole, sensor_int_data.bme_press_frac,
+      //          sensor_int_data.bme_hum_whole, sensor_int_data.bme_hum_frac,
+      //          // MPU6050 - Combined magnitude (fields 4-5)
+      //          sensor_int_data.mpu_accel_x_whole, sensor_int_data.mpu_accel_x_frac, // Just X accel
+      //          sensor_int_data.mpu_temp_whole, sensor_int_data.mpu_temp_frac        // MPU temp
+      // );
+
+      printf("MQTT: Publishing combined sensor data\r\n");
+      printf("BME280 Status: %s, MPU6050 Status: %s\r\n",
+             sensor_int_data.bme_valid ? "Valid" : "Invalid",
+             sensor_int_data.mpu_valid ? "Valid" : "Invalid");
+      printf("MQTT Payload: %s\r\n", payload);
+
+      // Publish to ThingSpeak
+      res = RC76XX_Publish(&mqttHandle, pubTopic, payload);
+      if (res == RC76XX_OK)
+      {
+        printf("MQTT: Publish successful\r\n");
+      }
+      else
+      {
+        printf("MQTT: Publish failed: %d\r\n", res);
+      }
     }
     else
     {
-      printf("Publish failed: %d\r\n", res);
+      // No data received in 65 seconds - send heartbeat or handle timeout
+      printf("MQTT: No sensor data received in 65 seconds\r\n");
+
+      // Optional: Send a status message or keep-alive
+      // You could also fall back to direct global variable access here if needed
     }
 
-    /* Wait before next cycle */
-    vTaskDelay(delay * 3);
+    // Small delay before next iteration
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
-
-
 
 /* USER CODE END 4 */
 

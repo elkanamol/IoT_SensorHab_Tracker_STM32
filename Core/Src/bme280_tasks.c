@@ -101,10 +101,9 @@ void StartBme280Task(void *argument)
 
         if (rslt == BME280_OK)
         {
-            // Send original float data to data logger via queue
-            if (DataLogger_QueueBME280Data(&bme_comp_data) != pdTRUE)
+            if (DataLogger_UpdateBME280Data(&bme_comp_data) != pdTRUE)
             {
-                printf("BME280: Failed to queue data (queue full)\r\n");
+                printf("BME280: Failed to update datalogger\r\n");
             }
 
             // Print data for debugging

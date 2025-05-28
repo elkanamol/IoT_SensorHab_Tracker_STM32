@@ -1,5 +1,6 @@
 #include "driver_mpu6050_basic.h"
 #include "mpu6050_task.h"
+#include "datalogger.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
@@ -143,6 +144,19 @@ void MPU6050_Task_Start(void *argument)
         if (mpu6050_read_data(MPU6050_Task_Handle.mutex, &MPU6050_Task_Handle.data) == 0) {
             // Print data using integer representation
             MPU6050_Task_PrintDataInt(&MPU6050_Task_Handle.data);  // ← Use integer printing
+            
+            // Send to unified datalogger
+            if (DataLogger_UpdateMPU6050Data(
+                MPU6050_Task_Handle.data.accel_x,
+                MPU6050_Task_Handle.data.accel_y,
+                MPU6050_Task_Handle.data.accel_z,
+                MPU6050_Task_Handle.data.gyro_x,
+                MPU6050_Task_Handle.data.gyro_y,
+                MPU6050_Task_Handle.data.gyro_z,
+                MPU6050_Task_Handle.data.temperature) != pdTRUE) {
+                printf("MPU6050: Failed to update datalogger\r\n");
+            }
+            
         } else {
             printf("MPU6050: ERROR - Failed to read sensor data\r\n");
         }
