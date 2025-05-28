@@ -7,9 +7,11 @@
 // Private variables (internal to this module)
 static uint32_t ring_buffer_write_address = RING_BUFFER_START_ADDRESS;
 static uint32_t total_records_written = 0;
-static BME280_Record_t page_buffer[RECORDS_PER_PAGE];
-static uint8_t records_in_buffer = 0;
-static uint32_t current_page_address = RING_BUFFER_START_ADDRESS;
+
+// Sector-based variables
+static uint8_t sector_buffer[SECTOR_BUFFER_SIZE];  // 4KB buffer instead of 256B
+static uint16_t records_in_buffer = 0;             // uint16_t for larger count (~256 records)
+static uint32_t current_sector_address = RING_BUFFER_START_ADDRESS;
 
 
 // Public variables (accessible from other modules)
@@ -20,7 +22,7 @@ static uint8_t DataLogger_Initialize(void);
 static void DataLogger_FindWritePosition(void);
 static void DataLogger_ProcessMessage(LogMessage_t *message);
 static void DataLogger_AddRecordToBuffer(BME280_Record_t *record);
-static void DataLogger_FlushPageBuffer(void);
+static void DataLogger_FlushSectorBuffer(void);
 static void DataLogger_PeriodicMaintenance(void);
 static void DataLogger_PrintConfiguration(void);
 static void DataLogger_PrintStatus(void);
@@ -84,8 +86,8 @@ static uint8_t DataLogger_Initialize(void)
         return 1;
     }
     
-    // Initialize page buffer
-    memset(page_buffer, 0xFF, sizeof(page_buffer));
+    // Initialize sector buffer
+    memset(sector_buffer, 0xFF, sizeof(sector_buffer));
     records_in_buffer = 0;
     
     // Initialize W25Q64 flash
@@ -119,24 +121,24 @@ static void DataLogger_FindWritePosition(void)
     BME280_Record_t scan_record;
     bool found_empty = false;
     
-    // Scan within ring buffer only
+    // Scan by sectors instead of pages
     for (uint32_t addr = RING_BUFFER_START_ADDRESS; 
          addr < RING_BUFFER_END_ADDRESS; 
-         addr += W25Q64_PAGE_SIZE)
+         addr += W25Q64_SECTOR_SIZE)  // 4KB increments instead of 256B
     {
         uint8_t status = w25qxx_basic_read(addr, (uint8_t *)&scan_record, sizeof(BME280_Record_t));
         if (status == 0 && scan_record.timestamp == 0xFFFFFFFF) {
-            current_page_address = addr;
+            current_sector_address = addr;
             ring_buffer_write_address = addr;
             found_empty = true;
-            printf("Found empty page at 0x%08lX\r\n", addr);
+            printf("Found empty sector at 0x%08lX\r\n", addr);
             break;
         }
     }
     
     if (!found_empty) {
         printf("Ring buffer full, starting FIFO from beginning\r\n");
-        current_page_address = RING_BUFFER_START_ADDRESS;
+        current_sector_address = RING_BUFFER_START_ADDRESS;
         ring_buffer_write_address = RING_BUFFER_START_ADDRESS;
     }
 }
@@ -184,57 +186,60 @@ static void DataLogger_ProcessMessage(LogMessage_t *message)
  */
 static void DataLogger_AddRecordToBuffer(BME280_Record_t *record)
 {
-    // Add to page buffer
-    page_buffer[records_in_buffer] = *record;
+    // Copy to sector buffer at correct offset
+    uint32_t offset = records_in_buffer * sizeof(BME280_Record_t);
+    memcpy(&sector_buffer[offset], record, sizeof(BME280_Record_t));
     records_in_buffer++;
     
-    // Flush when buffer is full
-    if (records_in_buffer >= RECORDS_PER_PAGE) {
-        DataLogger_FlushPageBuffer();
+    // Flush when sector buffer is full
+    if (records_in_buffer >= RECORDS_PER_SECTOR) {
+        DataLogger_FlushSectorBuffer();  // New function name
     }
 }
 
 /**
  * @brief Flush page buffer with 64KB ring buffer management
  */
-static void DataLogger_FlushPageBuffer(void)
+static void DataLogger_FlushSectorBuffer(void)
 {
     if (records_in_buffer == 0) return;
     
-    // printf("Flushing %d records to ring buffer at 0x%08lX\r\n", 
-    //        records_in_buffer, current_page_address);
+    uint32_t used_bytes = records_in_buffer * sizeof(BME280_Record_t);
+    
+    printf("Flushing 4KB sector: %d records (%lu bytes) at 0x%08lX\r\n", 
+           records_in_buffer, used_bytes, current_sector_address);
     
     // Fill remaining buffer with 0xFF
-    for (uint8_t i = records_in_buffer; i < RECORDS_PER_PAGE; i++) {
-        memset(&page_buffer[i], 0xFF, sizeof(BME280_Record_t));
+    if (used_bytes < SECTOR_BUFFER_SIZE) {
+        memset(&sector_buffer[used_bytes], 0xFF, SECTOR_BUFFER_SIZE - used_bytes);
     }
     
-    // Write page to flash
-    uint8_t status = w25qxx_basic_write(current_page_address, 
-                                        (uint8_t *)page_buffer, 
-                                        W25Q64_PAGE_SIZE);
+    // Write entire 4KB sector - MUCH more efficient!
+    uint8_t status = w25qxx_basic_write(current_sector_address, 
+                                        sector_buffer, 
+                                        SECTOR_BUFFER_SIZE);  // 4096 bytes instead of 256
     
     if (status == 0) {
         total_records_written += records_in_buffer;
         
-        // Advance to next page within ring buffer
-        current_page_address += W25Q64_PAGE_SIZE;
-        ring_buffer_write_address = current_page_address;
+        // Advance to next 4KB sector
+        current_sector_address += SECTOR_BUFFER_SIZE;
+        ring_buffer_write_address = current_sector_address;
         
         // Ring buffer wrap-around (64KB FIFO)
-        if (current_page_address >= RING_BUFFER_END_ADDRESS) {
+        if (current_sector_address >= RING_BUFFER_END_ADDRESS) {
             printf("Ring buffer full (64KB), wrapping to start (FIFO)\r\n");
-            current_page_address = RING_BUFFER_START_ADDRESS;
+            current_sector_address = RING_BUFFER_START_ADDRESS;
             ring_buffer_write_address = RING_BUFFER_START_ADDRESS;
         }
         
         // Reset buffer
         records_in_buffer = 0;
-        memset(page_buffer, 0xFF, sizeof(page_buffer));
+        memset(sector_buffer, 0xFF, sizeof(sector_buffer));
         
-        // printf("Page written successfully\r\n");
+        printf("4KB sector written successfully\r\n");
     } else {
-        printf("Page write failed (err=%d)\r\n", status);
+        printf("Sector write failed (err=%d)\r\n", status);
     }
 }
 
@@ -246,14 +251,14 @@ static void DataLogger_PeriodicMaintenance(void)
     static uint32_t maintenance_counter = 0;
     maintenance_counter++;
     
-    // Force flush every 30 seconds if there are buffered records
-    if (maintenance_counter % 30 == 0 && records_in_buffer > 0) {
+    //Force flush every 60 seconds instead of 30 (larger buffer)
+    if (maintenance_counter % 60 == 0 && records_in_buffer > 0) {
         printf("Periodic maintenance: flushing %d buffered records\r\n", records_in_buffer);
-        DataLogger_FlushPageBuffer();
+        DataLogger_FlushSectorBuffer();  // Updated function name
     }
     
-    // Print status every 60 seconds
-    if (maintenance_counter % 60 == 0) {
+    // Print status every 120 seconds instead of 60
+    if (maintenance_counter % 120 == 0) {
         DataLogger_PrintStatus();
     }
 }
@@ -263,15 +268,17 @@ static void DataLogger_PeriodicMaintenance(void)
  */
 static void DataLogger_PrintConfiguration(void)
 {
-    printf("\r\n=== Data Logger Configuration ===\r\n");
+    printf("\r\n=== Data Logger Configuration (4KB Sector Buffering) ===\r\n");
     printf("Ring Buffer Size: %d KB\r\n", FLASH_RING_BUFFER_SIZE / 1024);
     printf("Ring Buffer Range: 0x%08lX - 0x%08lX\r\n", 
            (uint32_t)RING_BUFFER_START_ADDRESS, (uint32_t)RING_BUFFER_END_ADDRESS);
     printf("Queue Size: %d messages\r\n", DATA_LOGGER_QUEUE_SIZE);
-    printf("Records per Page: %d\r\n", RECORDS_PER_PAGE);
+    printf("Records per Sector: %d\r\n", RECORDS_PER_SECTOR);
+    printf("Sector Buffer Size: %d bytes\r\n", SECTOR_BUFFER_SIZE);
+    
     printf("Total Ring Buffer Capacity: %d records\r\n", 
            FLASH_RING_BUFFER_SIZE / (int)sizeof(BME280_Record_t));
-    printf("================================\r\n\r\n");
+    printf("=======================================================\r\n\r\n");
 }
 
 /**
@@ -281,8 +288,8 @@ static void DataLogger_PrintStatus(void)
 {
     printf("\r\n=== Data Logger Status ===\r\n");
     printf("Ring Buffer Write Address: 0x%08lX\r\n", ring_buffer_write_address);
-    printf("Current Page Address: 0x%08lX\r\n", current_page_address);
-    printf("Records in Buffer: %d/%d\r\n", records_in_buffer, RECORDS_PER_PAGE);
+    printf("Current Sector Address: 0x%08lX\r\n", current_sector_address);
+    printf("Records in Buffer: %d/%d\r\n", records_in_buffer, RECORDS_PER_SECTOR);
     printf("Total Records Written: %lu\r\n", total_records_written);
     printf("Ring Buffer Usage: %.1f%%\r\n", 
            ((float)(ring_buffer_write_address - RING_BUFFER_START_ADDRESS) / FLASH_RING_BUFFER_SIZE) * 100.0f);
@@ -299,7 +306,7 @@ static void DataLogger_Shutdown(void)
     // Force flush any remaining buffered data
     if (records_in_buffer > 0) {
         printf("Flushing %d remaining records\r\n", records_in_buffer);
-        DataLogger_FlushPageBuffer();
+        DataLogger_FlushSectorBuffer();  // Updated function name
     }
     
     // Deinitialize flash
