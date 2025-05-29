@@ -45,6 +45,7 @@
 #include "mpu6050_task.h"
 #include "sensor_conversions.h"
 
+#include "lwgps.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -65,6 +66,7 @@
 #define DATA_LOGGER_QUEUE_SIZE 20
 #define MAX_QUEUE_WAIT_MS 1000
 
+#define GPS_RX_SIZE 256
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -82,6 +84,11 @@ static RC76XX_Handle_t mqttHandle;
 // struct bme280_dev bme_device;
 // struct bme280_data bme_comp_data;
 
+// lwgps variables
+uint8_t flag = 0;
+uint8_t gpsRx[GPS_RX_SIZE]; 
+lwgps_t hgps;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -93,7 +100,7 @@ static void MQTT_Task(void *pvParameters);
 void StartBme280Task(void *argument);
 void StartW25QTestTask(void *argument);
 void StartDataLoggerTask(void *argument);
-
+void vGpsTaskStart(void *argument);
 
 // // Queue interface functions (non-static, called from other tasks)
 // BaseType_t DataLogger_QueueBME280Data(struct bme280_data *bme_data);
@@ -104,10 +111,18 @@ void StartBme280Task(void *argument);
 
 void PrintBufferHex(const uint8_t *buffer, uint32_t size, uint32_t baseAddress);
 /* USER CODE END PFP */
-/* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART6)
+  {
+    flag = 1;
+  }
+  /* If the huart1 buffer is full, mark the flag. */
+}
 
 // DMA completion callbacks
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
@@ -202,6 +217,7 @@ int main(void)
   MX_USART3_UART_Init();
   MX_I2C1_Init();
   MX_SPI1_Init();
+  MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
 
   // Initialize uAT parser on huart3
@@ -298,6 +314,16 @@ int main(void)
   configASSERT(TaskStatus == pdPASS);
   printf("DataLogger task created\n");
 
+  // Create the GPS task
+  TaskStatus = xTaskCreate(vGpsTaskStart,
+                           "GPS_Task",
+                           512,
+                           NULL,
+                           tskIDLE_PRIORITY + 1,
+                           NULL);
+  configASSERT(TaskStatus == pdPASS);
+  printf("GPS task created\n");
+
   /* USER CODE END 2 */
 
   // /* Init scheduler */
@@ -324,26 +350,26 @@ int main(void)
 }
 
 /**
- * @brief System Clock Configuration
- * @retval None
- */
+  * @brief System Clock Configuration
+  * @retval None
+  */
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Configure LSE Drive Capability
-   */
+  */
   HAL_PWR_EnableBkUpAccess();
 
   /** Configure the main internal regulator output voltage
-   */
+  */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
-   * in the RCC_OscInitTypeDef structure.
-   */
+  * in the RCC_OscInitTypeDef structure.
+  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
@@ -358,15 +384,16 @@ void SystemClock_Config(void)
   }
 
   /** Activate the Over-Drive mode
-   */
+  */
   if (HAL_PWREx_EnableOverDrive() != HAL_OK)
   {
     Error_Handler();
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-   */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
@@ -577,6 +604,37 @@ static void MQTT_Task(void *argument)
     // Small delay before next iteration
     vTaskDelay(pdMS_TO_TICKS(1));
   }
+}
+
+void vGpsTaskStart(void *argument)
+{
+  // Initialize GPS
+  memset(gpsRx, 0, GPS_RX_SIZE); // Clear the buffer.
+  HAL_UART_Receive_DMA(&huart6, gpsRx, GPS_RX_SIZE);
+
+  if (lwgps_init(&hgps) != 1)
+  {
+    printf("GPS initialization failed\r\n");
+    vTaskDelete(NULL);
+  }
+
+  for(;;)
+  {
+    if (flag == 1)
+    {
+      lwgps_process(&hgps, gpsRx, GPS_RX_SIZE);
+      printf("---\r\n");
+      printf("Valid status: %d\r\n", hgps.is_valid);
+      printf("Time: %02d:%02d:%02d\r\n", hgps.hours, hgps.minutes, hgps.seconds);
+      printf("Latitude: %f degrees\r\n", hgps.latitude);
+      printf("Longitude: %f degrees\r\n", hgps.longitude);
+      printf("Altitude: %f meters\r\n", hgps.altitude + hgps.geo_sep);
+      printf("Speed: %.2f km/h\r\n", hgps.speed * 1.852);
+      flag = 0;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+  // GPS task code here
 }
 
 /* USER CODE END 4 */

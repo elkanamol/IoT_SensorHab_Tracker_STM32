@@ -65,6 +65,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/MPU6050/Src/driver_mpu6050_interface.c
     Drivers/MPU6050/Src/driver_mpu6050.c
     Drivers/MPU6050/Src/driver_mpu6050_basic.c
+    Drivers/lwgps/Src/lwgps.c
 )
 
 # Add include paths
@@ -75,6 +76,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/BME280/Inc
     Drivers/w25qxx/Inc
     Drivers/MPU6050/Inc
+    Drivers/lwgps/Inc
 )
 
 # Add project symbols (macros)
