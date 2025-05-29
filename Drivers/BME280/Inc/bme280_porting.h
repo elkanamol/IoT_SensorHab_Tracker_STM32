@@ -89,12 +89,12 @@ void bme280_hal_i2c_error_callback(I2C_HandleTypeDef *hi2c);
 
 void debug_bme280_raw_data(struct bme280_dev *dev);
 
-/**
- * @brief Converts BME280 sensor data from floating-point to integer representation.
- * @param[in] bme_comp_data Pointer to the compensated BME280 sensor data structure.
- * @param[out] bme_calc_data Pointer to the integer-based calculated sensor data structure.
- */
-void convert_bme_data_to_int(struct bme280_data *bme_comp_data, bme_calc_data_int_t *bme_calc_data);
+// /**
+//  * @brief Converts BME280 sensor data from floating-point to integer representation.
+//  * @param[in] bme_comp_data Pointer to the compensated BME280 sensor data structure.
+//  * @param[out] bme_calc_data Pointer to the integer-based calculated sensor data structure.
+//  */
+// void convert_bme_data_to_int(struct bme280_data *bme_comp_data, bme_calc_data_int_t *bme_calc_data);
 
 #ifdef __cplusplus
 }

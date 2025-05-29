@@ -56,7 +56,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/w25qxx_hal.c
     Core/Src/datalogger.c
     Core/Src/bme280_tasks.c
-    Core/Src/mpu6050_task.c    
+    Core/Src/mpu6050_task.c
+    Core/Src/sensor_conversions.c    
     Drivers/w25qxx/Src/driver_w25qxx_interface.c
     Drivers/w25qxx/Src/driver_w25qxx.c
     Drivers/w25qxx/Src/driver_w25qxx_advance.c

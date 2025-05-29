@@ -6,6 +6,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include "sensor_conversions.h"
 
 // Private variables
 static uint32_t ring_buffer_write_address = RING_BUFFER_START_ADDRESS;
@@ -456,83 +457,4 @@ static void DataLogger_PrintStatus(void)
     printf("BME280 Valid: %s\r\n", current_sensor_data.bme_valid ? "Yes" : "No");
     printf("MPU6050 Valid: %s\r\n", current_sensor_data.mpu_valid ? "Yes" : "No");
     printf("==========================\r\n\r\n");
-}
-
-/**
- * @brief Convert combined sensor float data to integer representation
- * @param float_data Pointer to float combined data structure
- * @param int_data Pointer to integer combined data structure to fill
- */
-void convert_combined_sensor_data_to_int(const SensorData_Combined_t *float_data, SensorData_Combined_Int_t *int_data)
-{
-    if (float_data == NULL || int_data == NULL) {
-        return;
-    }
-    
-    // Convert BME280 data (same as your existing conversion)
-    if (float_data->bme_valid) {
-        int_data->bme_temp_whole = (int32_t)float_data->bme_temperature;
-        int_data->bme_temp_frac = (int32_t)((float_data->bme_temperature - int_data->bme_temp_whole) * 100);
-        if (int_data->bme_temp_frac < 0) int_data->bme_temp_frac = -int_data->bme_temp_frac;
-        
-        int_data->bme_press_whole = (uint32_t)float_data->bme_pressure;
-        int_data->bme_press_frac = (uint32_t)((float_data->bme_pressure - int_data->bme_press_whole) * 100);
-        
-        int_data->bme_hum_whole = (uint32_t)float_data->bme_humidity;
-        int_data->bme_hum_frac = (uint32_t)((float_data->bme_humidity - int_data->bme_hum_whole) * 100);
-        
-        int_data->bme_valid = 1;
-    } else {
-        int_data->bme_temp_whole = 0; int_data->bme_temp_frac = 0;
-        int_data->bme_press_whole = 0; int_data->bme_press_frac = 0;
-        int_data->bme_hum_whole = 0; int_data->bme_hum_frac = 0;
-        int_data->bme_valid = 0;
-    }
-    
-    // Convert MPU6050 data
-    if (float_data->mpu_valid) {
-        // Accelerometer (g) - 3 decimal places
-        int_data->mpu_accel_x_whole = (int16_t)float_data->mpu_accel_x;
-        int_data->mpu_accel_x_frac = (int16_t)((float_data->mpu_accel_x - int_data->mpu_accel_x_whole) * 1000);
-        if (int_data->mpu_accel_x_frac < 0) int_data->mpu_accel_x_frac = -int_data->mpu_accel_x_frac;
-        
-        int_data->mpu_accel_y_whole = (int16_t)float_data->mpu_accel_y;
-        int_data->mpu_accel_y_frac = (int16_t)((float_data->mpu_accel_y - int_data->mpu_accel_y_whole) * 1000);
-        if (int_data->mpu_accel_y_frac < 0) int_data->mpu_accel_y_frac = -int_data->mpu_accel_y_frac;
-        
-        int_data->mpu_accel_z_whole = (int16_t)float_data->mpu_accel_z;
-        int_data->mpu_accel_z_frac = (int16_t)((float_data->mpu_accel_z - int_data->mpu_accel_z_whole) * 1000);
-        if (int_data->mpu_accel_z_frac < 0) int_data->mpu_accel_z_frac = -int_data->mpu_accel_z_frac;
-        
-        // Gyroscope (dps) - 2 decimal places
-        int_data->mpu_gyro_x_whole = (int16_t)float_data->mpu_gyro_x;
-        int_data->mpu_gyro_x_frac = (int16_t)((float_data->mpu_gyro_x - int_data->mpu_gyro_x_whole) * 100);
-        if (int_data->mpu_gyro_x_frac < 0) int_data->mpu_gyro_x_frac = -int_data->mpu_gyro_x_frac;
-        
-        int_data->mpu_gyro_y_whole = (int16_t)float_data->mpu_gyro_y;
-        int_data->mpu_gyro_y_frac = (int16_t)((float_data->mpu_gyro_y - int_data->mpu_gyro_y_whole) * 100);
-        if (int_data->mpu_gyro_y_frac < 0) int_data->mpu_gyro_y_frac = -int_data->mpu_gyro_y_frac;
-        
-        int_data->mpu_gyro_z_whole = (int16_t)float_data->mpu_gyro_z;
-        int_data->mpu_gyro_z_frac = (int16_t)((float_data->mpu_gyro_z - int_data->mpu_gyro_z_whole) * 100);
-        if (int_data->mpu_gyro_z_frac < 0) int_data->mpu_gyro_z_frac = -int_data->mpu_gyro_z_frac;
-        
-        // Temperature (°C) - 2 decimal places
-        int_data->mpu_temp_whole = (int16_t)float_data->mpu_temperature;
-        int_data->mpu_temp_frac = (int16_t)((float_data->mpu_temperature - int_data->mpu_temp_whole) * 100);
-        if (int_data->mpu_temp_frac < 0) int_data->mpu_temp_frac = -int_data->mpu_temp_frac;
-        
-        int_data->mpu_valid = 1;
-    } else {
-        int_data->mpu_accel_x_whole = 0; int_data->mpu_accel_x_frac = 0;
-        int_data->mpu_accel_y_whole = 0; int_data->mpu_accel_y_frac = 0;
-        int_data->mpu_accel_z_whole = 0; int_data->mpu_accel_z_frac = 0;
-        int_data->mpu_gyro_x_whole = 0; int_data->mpu_gyro_x_frac = 0;
-        int_data->mpu_gyro_y_whole = 0; int_data->mpu_gyro_y_frac = 0;
-        int_data->mpu_gyro_z_whole = 0; int_data->mpu_gyro_z_frac = 0;
-        int_data->mpu_temp_whole = 0; int_data->mpu_temp_frac = 0;
-        int_data->mpu_valid = 0;
-    }
-    
-    int_data->timestamp = float_data->timestamp;
 }

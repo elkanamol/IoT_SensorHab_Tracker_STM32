@@ -1,6 +1,7 @@
 #include "bme280_tasks.h"
-#include "bme280_porting.h"
+#include "bme280_porting.h" 
 #include "bme280.h"
+#include "sensor_conversions.h" 
 #include "main.h"
 #include "stdio.h"
 #include "datalogger.h"
@@ -289,30 +290,12 @@ int8_t BME280_TakeForcedMeasurement(void)
  */
 void BME280_PrintMeasurementData(void)
 {
-    // Convert for integer printing
     bme_calc_data_int_t bme_calc_data;
     convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
 
-    printf("BME280: %d.%02d°C, %d.%02dhPa, %d.%02d%%\r\n", 
-           (int)bme_calc_data.temp_whole, (int)bme_calc_data.temp_frac,
-           (int)bme_calc_data.press_whole, (int)bme_calc_data.press_frac,
-           (int)bme_calc_data.hum_whole, (int)bme_calc_data.hum_frac);
+    printf("BME280: %ld.%02ld°C, %lu.%02lu hPa, %lu.%02lu%%\r\n", 
+           bme_calc_data.temp_whole, bme_calc_data.temp_frac,
+           bme_calc_data.press_whole, bme_calc_data.press_frac,
+           bme_calc_data.hum_whole, bme_calc_data.hum_frac);
 }
 
-// /**
-//  * @brief Print BME280 measurement data for debugging
-//  */
-// void BME280_PrintMeasurementData(void)
-// {
-//     // Convert for printf only (since printf doesn't support float)
-//     bme_calc_data_int_t bme_calc_data;
-//     convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
-//     char temp_str[16], press_str[16], hum_str[16];
-
-//     // Use sprintf for float conversion (if supported)
-//     sprintf(temp_str, "%.2f", bme_comp_data.temperature);
-//     sprintf(press_str, "%.2f", bme_comp_data.pressure);
-//     sprintf(hum_str, "%.2f", bme_comp_data.humidity);
-
-//     printf("BME280: %s°C, %shPa, %s%%\r\n", temp_str, press_str, hum_str);
-// }

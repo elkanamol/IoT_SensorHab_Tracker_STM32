@@ -152,19 +152,19 @@ void debug_bme280_raw_data(struct bme280_dev *dev)
     }
 }
 
-void convert_bme_data_to_int(struct bme280_data *bme_comp_data, bme_calc_data_int_t *bme_calc_data)
-{
+// void convert_bme_data_to_int(struct bme280_data *bme_comp_data, bme_calc_data_int_t *bme_calc_data)
+// {
 
-    bme_calc_data->temp_whole = (int32_t)bme_comp_data->temperature;
-    bme_calc_data->temp_frac = (int32_t)((bme_comp_data->temperature - bme_calc_data->temp_whole) * 100 + 0.5); // Round to nearest
+//     bme_calc_data->temp_whole = (int32_t)bme_comp_data->temperature;
+//     bme_calc_data->temp_frac = (int32_t)((bme_comp_data->temperature - bme_calc_data->temp_whole) * 100 + 0.5); // Round to nearest
 
-    bme_calc_data->press_pa = (uint32_t)(bme_comp_data->pressure + 0.5); // Round to nearest Pa
-    bme_calc_data->press_whole = bme_calc_data->press_pa / 100;
-    bme_calc_data->press_frac = bme_calc_data->press_pa % 100;
+//     bme_calc_data->press_pa = (uint32_t)(bme_comp_data->pressure + 0.5); // Round to nearest Pa
+//     bme_calc_data->press_whole = bme_calc_data->press_pa / 100;
+//     bme_calc_data->press_frac = bme_calc_data->press_pa % 100;
 
-    bme_calc_data->hum_whole = (uint32_t)bme_comp_data->humidity;
-    bme_calc_data->hum_frac = (uint32_t)((bme_comp_data->humidity - bme_calc_data->hum_whole) * 100 + 0.5); // Round to nearest
-}
+//     bme_calc_data->hum_whole = (uint32_t)bme_comp_data->humidity;
+//     bme_calc_data->hum_frac = (uint32_t)((bme_comp_data->humidity - bme_calc_data->hum_whole) * 100 + 0.5); // Round to nearest
+// }
 
 // --- HAL I2C DMA Callback Wrappers ---
 // These functions should be called from the global HAL I2C callbacks in stm32xxxx_it.c or similar

@@ -43,6 +43,7 @@
 #include "driver_w25qxx_interface.h"
 #include "driver_w25qxx_basic.h"
 #include "mpu6050_task.h"
+#include "sensor_conversions.h"
 
 /* USER CODE END Includes */
 
@@ -512,12 +513,12 @@ static void MQTT_Task(void *argument)
   // Main MQTT transmission loop
   for (;;)
   {
-    // Wait for sensor data from DataLogger queue (60-second interval)
+    // Blocking until data is available in the queue
     if (xMQTTQueue != NULL &&
-        xQueueReceive(xMQTTQueue, &sensor_data, pdMS_TO_TICKS(65000)) == pdTRUE)
+        xQueueReceive(xMQTTQueue, &sensor_data, pdMS_TO_TICKS(portMAX_DELAY)) == pdTRUE)
     {
       // Convert to integer representation
-      convert_combined_sensor_data_to_int(&sensor_data, &sensor_int_data);
+      convert_combined_sensor_data_to_int_optimized(&sensor_data, &sensor_int_data);
 
       // Format payload for ThingSpeak with both BME280 and MPU6050 data
       char payload[300];
@@ -548,9 +549,9 @@ static void MQTT_Task(void *argument)
       // );
 
       printf("MQTT: Publishing combined sensor data\r\n");
-      printf("BME280 Status: %s, MPU6050 Status: %s\r\n",
-             sensor_int_data.bme_valid ? "Valid" : "Invalid",
-             sensor_int_data.mpu_valid ? "Valid" : "Invalid");
+      // printf("BME280 Status: %s, MPU6050 Status: %s\r\n",
+      //        sensor_int_data.bme_valid ? "Valid" : "Invalid",
+      //        sensor_int_data.mpu_valid ? "Valid" : "Invalid");
       printf("MQTT Payload: %s\r\n", payload);
 
       // Publish to ThingSpeak
@@ -567,14 +568,14 @@ static void MQTT_Task(void *argument)
     else
     {
       // No data received in 65 seconds - send heartbeat or handle timeout
-      printf("MQTT: No sensor data received in 65 seconds\r\n");
+      // printf("MQTT: No sensor data received in 65 seconds\r\n");
 
       // Optional: Send a status message or keep-alive
       // You could also fall back to direct global variable access here if needed
     }
 
     // Small delay before next iteration
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(1));
   }
 }
 

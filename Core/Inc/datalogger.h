@@ -105,7 +105,6 @@ extern QueueHandle_t xMQTTQueue;
 
 // Public API functions
 void StartDataLoggerTask(void *argument);
-void convert_combined_sensor_data_to_int(const SensorData_Combined_t *float_data, SensorData_Combined_Int_t *int_data);
 
 BaseType_t DataLogger_UpdateBME280Data(struct bme280_data *bme_data);
 BaseType_t DataLogger_UpdateMPU6050Data(float ax, float ay, float az, float gx, float gy, float gz, float temp);

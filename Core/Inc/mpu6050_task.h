@@ -47,5 +47,6 @@ void MPU6050_Task_Start(void *argument);
 void MPU6050_Task_PrintData(const MPU6050_Data_t *data);
 void MPU6050_Task_PrintDataInt(const MPU6050_Data_t *data);
 void convert_mpu6050_data_to_int(const MPU6050_Data_t *float_data, MPU6050_Data_Int_t *int_data);
+void convert_mpu6050_data_to_int_optimized(const MPU6050_Data_t *float_data, MPU6050_Data_Int_t *int_data);
 
 #endif // MPU6050_TASK_H
