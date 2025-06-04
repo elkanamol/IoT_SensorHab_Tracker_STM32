@@ -545,33 +545,40 @@ static void MQTT_Task(void *argument)
         xQueueReceive(xMQTTQueue, &sensor_data, pdMS_TO_TICKS(portMAX_DELAY)) == pdTRUE)
     {
       // Convert to integer representation
-      convert_combined_sensor_data_to_int_optimized(&sensor_data, &sensor_int_data);
+      // convert_combined_sensor_data_to_int_optimized(&sensor_data, &sensor_int_data);
 
       // Enhanced payload with GPS data
       char payload[400]; // Increased size for GPS data
 
-      snprintf(payload, sizeof(payload),
-               "field1=%ld.%02ld&field2=%lu.%02lu&field3=%lu.%02lu&field4=%d.%03d&field5=%d.%03d&field6=%d.%03d&field7=%d.%03d&field8=%d.%03d&lat=%ld.%06ld&long=%ld.%06ld",
-               // BME280 data (fields 1-3)
-               sensor_int_data.bme_temp_whole, sensor_int_data.bme_temp_frac,   // Temperature
-               sensor_int_data.bme_press_whole, sensor_int_data.bme_press_frac, // Pressure
-               sensor_int_data.bme_hum_whole, sensor_int_data.bme_hum_frac,     // Humidity
-               // MPU6050 data (fields 4-8)
-               sensor_int_data.mpu_accel_x_whole, sensor_int_data.mpu_accel_x_frac,
-               sensor_int_data.mpu_accel_y_whole, sensor_int_data.mpu_accel_y_frac,
-               sensor_int_data.mpu_accel_z_whole, sensor_int_data.mpu_accel_z_frac,
-               sensor_int_data.mpu_gyro_x_whole, sensor_int_data.mpu_gyro_x_frac,
-               sensor_int_data.mpu_gyro_y_whole, sensor_int_data.mpu_gyro_y_frac, // Satellites
-               // Additional GPS fields
-               sensor_int_data.gps_lat_whole, sensor_int_data.gps_lat_frac, // Latitude
-               sensor_int_data.gps_lon_whole, sensor_int_data.gps_lon_frac  // Longitude
-      );
+      // float version
+      snprintf(payload, sizeof(payload), "field1=%02f&field2=%02f&field3=%02f&field4=%02f&field5=%03f&field6=%03f&field7=%03f&field8=%03f&lat=%06f&long=%06f",
+               sensor_data.bme_temperature, sensor_data.bme_pressure, sensor_data.bme_humidity,
+               sensor_data.mpu_accel_x, sensor_data.mpu_accel_y, sensor_data.mpu_accel_z,
+               sensor_data.mpu_gyro_x, sensor_data.mpu_gyro_y,
+               sensor_data.gps_latitude, sensor_data.gps_longitude);
+
+      // snprintf(payload, sizeof(payload),
+      //          "field1=%ld.%02ld&field2=%lu.%02lu&field3=%lu.%02lu&field4=%d.%03d&field5=%d.%03d&field6=%d.%03d&field7=%d.%03d&field8=%d.%03d&lat=%ld.%06ld&long=%ld.%06ld",
+      //          // BME280 data (fields 1-3)
+      //          sensor_int_data.bme_temp_whole, sensor_int_data.bme_temp_frac,   // Temperature
+      //          sensor_int_data.bme_press_whole, sensor_int_data.bme_press_frac, // Pressure
+      //          sensor_int_data.bme_hum_whole, sensor_int_data.bme_hum_frac,     // Humidity
+      //          // MPU6050 data (fields 4-8)
+      //          sensor_int_data.mpu_accel_x_whole, sensor_int_data.mpu_accel_x_frac,
+      //          sensor_int_data.mpu_accel_y_whole, sensor_int_data.mpu_accel_y_frac,
+      //          sensor_int_data.mpu_accel_z_whole, sensor_int_data.mpu_accel_z_frac,
+      //          sensor_int_data.mpu_gyro_x_whole, sensor_int_data.mpu_gyro_x_frac,
+      //          sensor_int_data.mpu_gyro_y_whole, sensor_int_data.mpu_gyro_y_frac, // Satellites
+      //          // Additional GPS fields
+      //          sensor_int_data.gps_lat_whole, sensor_int_data.gps_lat_frac, // Latitude
+      //          sensor_int_data.gps_lon_whole, sensor_int_data.gps_lon_frac  // Longitude
+      // );
 
       // printf("MQTT: Publishing combined sensor data with GPS\r\n");
       printf("BME280: %s, MPU6050: %s, GPS: %s\r\n",
-             sensor_int_data.bme_valid ? "Valid" : "Invalid",
-             sensor_int_data.mpu_valid ? "Valid" : "Invalid",
-             sensor_int_data.gps_valid ? "Valid" : "Invalid");
+             sensor_data.bme_valid ? "Valid" : "Invalid",
+             sensor_data.mpu_valid ? "Valid" : "Invalid",
+             sensor_data.gps_valid ? "Valid" : "Invalid");
       // printf("MQTT Payload: %s\r\n", payload);
 
       // Publish to ThingSpeak
@@ -623,7 +630,7 @@ void vGpsTaskStart(void *argument)
       current_sensor_data.gps_altitude = hgps.altitude + hgps.geo_sep;
       current_sensor_data.gps_speed = hgps.speed * 1.852f;
       if(current_sensor_data.gps_longitude != 0 && current_sensor_data.gps_altitude != 0){
-        convert_combined_sensor_data_to_int_optimized(&current_sensor_data, &gps_task_sensor_data);
+        // convert_combined_sensor_data_to_int_optimized(&current_sensor_data, &gps_task_sensor_data);
 
         float speed_kmh = hgps.speed * 1.852f;             // Convert knots to km/h
         float altitude_msl = hgps.altitude + hgps.geo_sep; // Mean sea level altitude

@@ -138,20 +138,21 @@ void MPU6050_Task_Start(void *argument)
         // Read sensor data
         if (mpu6050_read_data(MPU6050_Task_Handle.mutex, &MPU6050_Task_Handle.data) == 0) {
             // Print data using integer representation
-            MPU6050_Task_PrintDataInt(&MPU6050_Task_Handle.data);  // ← Use integer printing
-            
+            // MPU6050_Task_PrintDataInt(&MPU6050_Task_Handle.data);  // ← Use integer printing
+            MPU6050_Task_PrintData(&MPU6050_Task_Handle.data);
+
             // Send to unified datalogger
             if (DataLogger_UpdateMPU6050Data(
-                MPU6050_Task_Handle.data.accel_x,
-                MPU6050_Task_Handle.data.accel_y,
-                MPU6050_Task_Handle.data.accel_z,
-                MPU6050_Task_Handle.data.gyro_x,
-                MPU6050_Task_Handle.data.gyro_y,
-                MPU6050_Task_Handle.data.gyro_z,
-                MPU6050_Task_Handle.data.temperature) != pdTRUE) {
+                    MPU6050_Task_Handle.data.accel_x,
+                    MPU6050_Task_Handle.data.accel_y,
+                    MPU6050_Task_Handle.data.accel_z,
+                    MPU6050_Task_Handle.data.gyro_x,
+                    MPU6050_Task_Handle.data.gyro_y,
+                    MPU6050_Task_Handle.data.gyro_z,
+                    MPU6050_Task_Handle.data.temperature) != pdTRUE)
+            {
                 printf("MPU6050: Failed to update datalogger\r\n");
             }
-            
         } else {
             printf("MPU6050: ERROR - Failed to read sensor data\r\n");
         }
@@ -160,6 +161,8 @@ void MPU6050_Task_Start(void *argument)
         vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(MPU6050_READ_PERIOD_MS));
     }
 }
+
+
 
 /**
  * @brief Print MPU6050 sensor data using integer representation

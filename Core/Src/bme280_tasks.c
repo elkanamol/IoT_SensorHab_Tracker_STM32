@@ -285,10 +285,16 @@ int8_t BME280_TakeForcedMeasurement(void)
     return rslt;
 }
 
+void BME280_PrintMeasurementData(void)
+{
+    printf("BME280: %.2f°C, %.2f hPa, %.2f%%\r\n", 
+           bme_comp_data.temperature, bme_comp_data.pressure, bme_comp_data.humidity);
+}
+
 /**
  * @brief Print BME280 measurement data for debugging
  */
-void BME280_PrintMeasurementData(void)
+void BME280_PrintMeasurementData_int(void)
 {
     bme_calc_data_int_t bme_calc_data;
     convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
