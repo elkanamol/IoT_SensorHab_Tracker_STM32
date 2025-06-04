@@ -14,7 +14,6 @@ target_compile_definitions(stm32cubemx INTERFACE
 
 target_include_directories(stm32cubemx INTERFACE
     ../../Core/Inc
-    ../../I-CUBE-ATC
     ../../Drivers/STM32F7xx_HAL_Driver/Inc
     ../../Drivers/STM32F7xx_HAL_Driver/Inc/Legacy
     ../../Middlewares/Third_Party/FreeRTOS/Source/include
@@ -22,7 +21,6 @@ target_include_directories(stm32cubemx INTERFACE
     ../../Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1
     ../../Drivers/CMSIS/Device/ST/STM32F7xx/Include
     ../../Drivers/CMSIS/Include
-    ../../Middlewares/Third_Party/NimaLTD_Driver/ATC
 )
 
 target_sources(stm32cubemx INTERFACE
@@ -67,7 +65,6 @@ target_sources(stm32cubemx INTERFACE
     ../../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c
     ../../Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c
     ../../Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1/port.c
-    ../../Middlewares/Third_Party/NimaLTD_Driver/ATC/atc.c
     ../../Core/Src/sysmem.c
     ../../Core/Src/syscalls.c
     ../../startup_stm32f756xx.s

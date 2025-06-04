@@ -97,7 +97,6 @@ static uint8_t DataLogger_Initialize(void)
  */
 static void DataLogger_InitializeRecord(SensorData_Combined_t *record)
 {
-    // Clear the entire structure
     memset(record, 0xFF, sizeof(SensorData_Combined_t));
     
     // Set default values for non-0xFF fields
@@ -115,6 +114,12 @@ static void DataLogger_InitializeRecord(SensorData_Combined_t *record)
     record->mpu_gyro_z = 0.0f;
     record->mpu_temperature = 0.0f;
     record->mpu_valid = 0;
+    record->gps_latitude = 0.0f;
+    record->gps_longitude = 0.0f;
+    record->gps_altitude = 0.0f;
+    record->gps_speed = 0.0f;
+    record->gps_valid = 0;
+    record->gps_satellites = 0;
     record->crc = 0;
 }
 
@@ -216,6 +221,29 @@ BaseType_t DataLogger_ForceSave(void)
     return xQueueSend(xDataLoggerQueue, &message, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS));
 }
 
+// Add GPS update function
+/**
+ * @brief Update GPS data in current sensor data
+ * 
+ * @param lat Latitude value
+ * @param lon Longitude value
+ * @param alt Altitude value
+ * @param speed Speed value
+ * @return BaseType_t Result of sending GPS update message to queue
+ */
+BaseType_t DataLogger_UpdateGPSData(float lat, float lon, float alt, float speed)
+{
+    SensorUpdateMessage_t message = {
+        .type = SENSOR_UPDATE_GPS,
+        .timestamp = HAL_GetTick(),
+        .data.gps_data = {
+            .latitude = lat,
+            .longitude = lon,
+            .altitude = alt,
+            .speed = speed}};
+
+    return xQueueSend(xDataLoggerQueue, &message, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS));
+}
 /**
  * @brief Process sensor update messages
  */
@@ -247,6 +275,15 @@ static void DataLogger_ProcessSensorUpdate(SensorUpdateMessage_t *message)
             // printf("DataLogger: MPU6050 data updated\r\n");
             break;
             
+        case SENSOR_UPDATE_GPS:  // Add GPS case
+            current_sensor_data.gps_latitude = message->data.gps_data.latitude;
+            current_sensor_data.gps_longitude = message->data.gps_data.longitude;
+            current_sensor_data.gps_altitude = message->data.gps_data.altitude;
+            current_sensor_data.gps_speed = message->data.gps_data.speed;
+            current_sensor_data.gps_satellites = message->data.gps_data.satellites;
+            current_sensor_data.gps_valid = 1;
+            break;
+            
         case SENSOR_UPDATE_FORCE_SAVE:
             DataLogger_SaveCurrentDataToFlash();
             break;
@@ -270,7 +307,7 @@ static void DataLogger_CheckPeriodicSave(void)
     
     // Save every 10 seconds if we have valid data
     if ((current_time - last_flash_save) >= pdMS_TO_TICKS(1000) && 
-        (current_sensor_data.bme_valid || current_sensor_data.mpu_valid))
+        (current_sensor_data.bme_valid || current_sensor_data.mpu_valid || current_sensor_data.gps_valid))
     {
         DataLogger_SaveCurrentDataToFlash();
     }
@@ -456,5 +493,6 @@ static void DataLogger_PrintStatus(void)
     printf("Current Record ID: %lu\r\n", record_counter);
     printf("BME280 Valid: %s\r\n", current_sensor_data.bme_valid ? "Yes" : "No");
     printf("MPU6050 Valid: %s\r\n", current_sensor_data.mpu_valid ? "Yes" : "No");
+    printf("GPS Valid: %s (%d sats)\r\n", current_sensor_data.gps_valid ? "Yes" : "No", current_sensor_data.gps_satellites);
     printf("==========================\r\n\r\n");
 }

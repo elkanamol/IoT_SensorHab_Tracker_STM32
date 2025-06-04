@@ -7,6 +7,7 @@
 #include "driver_w25qxx_basic.h"
 #include "FreeRTOS.h"
 #include "queue.h"
+#include "lwgps.h"  // Add GPS include
 
 // Ring buffer configuration (64KB FIFO)
 #define FLASH_RING_BUFFER_SIZE (64 * 1024)
@@ -31,37 +32,44 @@
 typedef enum {
     SENSOR_UPDATE_BME280,
     SENSOR_UPDATE_MPU6050,
+    SENSOR_UPDATE_GPS,           // Add GPS update type
     SENSOR_UPDATE_SYSTEM_EVENT,
-    SENSOR_UPDATE_FORCE_SAVE,  // Force save current data to flash
+    SENSOR_UPDATE_FORCE_SAVE,
 } SensorUpdateType_t;
 
 // Unified sensor data structure (this goes to flash)
 typedef struct {
     uint32_t timestamp;
-    uint32_t record_id;  // Incremental record ID
+    uint32_t record_id;
     
     // BME280 data
     float bme_temperature;
     float bme_pressure;
     float bme_humidity;
     uint8_t bme_valid;
-    uint8_t bme_padding[3];  // Alignment padding
+    uint8_t bme_padding[3];
     
     // MPU6050 data
     float mpu_accel_x, mpu_accel_y, mpu_accel_z;
     float mpu_gyro_x, mpu_gyro_y, mpu_gyro_z;
     float mpu_temperature;
     uint8_t mpu_valid;
-    uint8_t mpu_padding[3];  // Alignment padding
+    uint8_t mpu_padding[3];
     
-    // Future sensors can be added here
-    // GPS, Magnetometer, etc.
+    // GPS data
+    float gps_latitude;
+    float gps_longitude;
+    float gps_altitude;
+    float gps_speed;
+    uint8_t gps_valid;
+    uint8_t gps_satellites;
+    uint8_t gps_padding[2];
     
-    uint32_t crc;  // CRC of entire record
-    uint8_t reserved[16];  // Reserved for future use, filled with 0xFF
+    uint32_t crc;
+    uint8_t reserved[8];  // Reduced reserved space due to GPS data
 } SensorData_Combined_t;
 
-// Add this structure for integer representation of combined data
+// Integer representation for MQTT transmission
 typedef struct {
     // BME280 integer data
     int32_t bme_temp_whole, bme_temp_frac;
@@ -79,10 +87,16 @@ typedef struct {
     int16_t mpu_temp_whole, mpu_temp_frac;
     uint8_t mpu_valid;
     
+    // GPS integer data
+    int32_t gps_lat_whole, gps_lat_frac;
+    int32_t gps_lon_whole, gps_lon_frac;
+    int16_t gps_alt_whole, gps_alt_frac;
+    uint16_t gps_speed_whole, gps_speed_frac;
+    uint8_t gps_valid;
+    uint8_t gps_satellites;
+    
     uint32_t timestamp;
 } SensorData_Combined_Int_t;
-
-// Function declaration
 
 // Sensor update message
 typedef struct {
@@ -95,6 +109,14 @@ typedef struct {
             float gyro_x, gyro_y, gyro_z;
             float temperature;
         } mpu_data;
+        struct {
+            float latitude;
+            float longitude;
+            float altitude;
+            float speed;
+            uint8_t satellites;
+            uint8_t is_valid;
+        } gps_data;
         char system_event[32];
     } data;
 } SensorUpdateMessage_t;
@@ -108,7 +130,8 @@ void StartDataLoggerTask(void *argument);
 
 BaseType_t DataLogger_UpdateBME280Data(struct bme280_data *bme_data);
 BaseType_t DataLogger_UpdateMPU6050Data(float ax, float ay, float az, float gx, float gy, float gz, float temp);
+BaseType_t DataLogger_UpdateGPSData(float lat, float lon, float alt, float speed);
 BaseType_t DataLogger_QueueSystemEvent(const char *event_text);
-BaseType_t DataLogger_ForceSave(void);  // Force save current data
+BaseType_t DataLogger_ForceSave(void);
 
 #endif /* DATALOGGER_H */

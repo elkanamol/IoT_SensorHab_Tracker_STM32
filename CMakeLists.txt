@@ -87,6 +87,16 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
-
+    m  # Math library for sin, cos, sqrt, etc.
     # Add user defined libraries
+)
+
+# Linker flags for FPU and floating point printf
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
+    # -mfpu=fpv5-sp-d16
+    # -mfloat-abi=hard
+    -u _printf_float
+    # -u _scanf_float
+    -Wl,--gc-sections        # Remove unused sections
+    -Wl,--print-memory-usage # Show memory usage after linking
 )

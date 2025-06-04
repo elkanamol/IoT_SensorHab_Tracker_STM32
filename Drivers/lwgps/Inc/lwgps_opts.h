@@ -49,7 +49,15 @@
  *                      - Optional details of each satellite in view. See \ref LWGPS_CFG_STATEMENT_GPGSV_SAT_DET
  */
 #ifndef LWGPS_CFG_STATEMENT_GPGSV
-#define LWGPS_CFG_STATEMENT_GPGSV           0
+#define LWGPS_CFG_STATEMENT_GPGSV           1
+#endif
+
+#ifndef LWGPS_CFG_STATEMENT_GPGGA
+#define LWGPS_CFG_STATEMENT_GPGGA           1
+#endif
+
+#ifndef LWGPS_CFG_STATEMENT_GPGSA
+#define LWGPS_CFG_STATEMENT_GPGSA           1
 #endif
 
 #endif /* LWGPS_HDR_OPTS_H */

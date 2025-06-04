@@ -66,7 +66,7 @@
 #define DATA_LOGGER_QUEUE_SIZE 20
 #define MAX_QUEUE_WAIT_MS 1000
 
-#define GPS_RX_SIZE 256
+#define GPS_RX_SIZE 512
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -547,39 +547,32 @@ static void MQTT_Task(void *argument)
       // Convert to integer representation
       convert_combined_sensor_data_to_int_optimized(&sensor_data, &sensor_int_data);
 
-      // Format payload for ThingSpeak with both BME280 and MPU6050 data
-      char payload[300];
+      // Enhanced payload with GPS data
+      char payload[400]; // Increased size for GPS data
 
-      // Build payload with available sensor data
       snprintf(payload, sizeof(payload),
-               "field1=%ld.%02ld&field2=%lu.%02lu&field3=%lu.%02lu&field4=%d.%03d&field5=%d.%03d&field6=%d.%03d&field7=%d.%02d&field8=%d.%02d",
+               "field1=%ld.%02ld&field2=%lu.%02lu&field3=%lu.%02lu&field4=%d.%03d&field5=%d.%03d&field6=%d.%03d&field7=%d.%03d&field8=%d.%03d&lat=%ld.%06ld&long=%ld.%06ld",
                // BME280 data (fields 1-3)
                sensor_int_data.bme_temp_whole, sensor_int_data.bme_temp_frac,   // Temperature
                sensor_int_data.bme_press_whole, sensor_int_data.bme_press_frac, // Pressure
                sensor_int_data.bme_hum_whole, sensor_int_data.bme_hum_frac,     // Humidity
                // MPU6050 data (fields 4-8)
-               sensor_int_data.mpu_accel_x_whole, sensor_int_data.mpu_accel_x_frac, // Accel X
-               sensor_int_data.mpu_accel_y_whole, sensor_int_data.mpu_accel_y_frac, // Accel Y
-               sensor_int_data.mpu_accel_z_whole, sensor_int_data.mpu_accel_z_frac, // Accel Z
-               sensor_int_data.mpu_gyro_x_whole, sensor_int_data.mpu_gyro_x_frac,   // Gyro X
-               sensor_int_data.mpu_gyro_y_whole, sensor_int_data.mpu_gyro_y_frac    // Gyro Y
+               sensor_int_data.mpu_accel_x_whole, sensor_int_data.mpu_accel_x_frac,
+               sensor_int_data.mpu_accel_y_whole, sensor_int_data.mpu_accel_y_frac,
+               sensor_int_data.mpu_accel_z_whole, sensor_int_data.mpu_accel_z_frac,
+               sensor_int_data.mpu_gyro_x_whole, sensor_int_data.mpu_gyro_x_frac,
+               sensor_int_data.mpu_gyro_y_whole, sensor_int_data.mpu_gyro_y_frac, // Satellites
+               // Additional GPS fields
+               sensor_int_data.gps_lat_whole, sensor_int_data.gps_lat_frac, // Latitude
+               sensor_int_data.gps_lon_whole, sensor_int_data.gps_lon_frac  // Longitude
       );
-      // snprintf(payload, sizeof(payload),
-      //          "field1=%ld.%02ld&field2=%lu.%02lu&field3=%lu.%02lu&field4=%d.%03d&field5=%d.%02d",
-      //          // BME280 (fields 1-3)
-      //          sensor_int_data.bme_temp_whole, sensor_int_data.bme_temp_frac,
-      //          sensor_int_data.bme_press_whole, sensor_int_data.bme_press_frac,
-      //          sensor_int_data.bme_hum_whole, sensor_int_data.bme_hum_frac,
-      //          // MPU6050 - Combined magnitude (fields 4-5)
-      //          sensor_int_data.mpu_accel_x_whole, sensor_int_data.mpu_accel_x_frac, // Just X accel
-      //          sensor_int_data.mpu_temp_whole, sensor_int_data.mpu_temp_frac        // MPU temp
-      // );
 
-      printf("MQTT: Publishing combined sensor data\r\n");
-      // printf("BME280 Status: %s, MPU6050 Status: %s\r\n",
-      //        sensor_int_data.bme_valid ? "Valid" : "Invalid",
-      //        sensor_int_data.mpu_valid ? "Valid" : "Invalid");
-      printf("MQTT Payload: %s\r\n", payload);
+      // printf("MQTT: Publishing combined sensor data with GPS\r\n");
+      printf("BME280: %s, MPU6050: %s, GPS: %s\r\n",
+             sensor_int_data.bme_valid ? "Valid" : "Invalid",
+             sensor_int_data.mpu_valid ? "Valid" : "Invalid",
+             sensor_int_data.gps_valid ? "Valid" : "Invalid");
+      // printf("MQTT Payload: %s\r\n", payload);
 
       // Publish to ThingSpeak
       res = RC76XX_Publish(&mqttHandle, pubTopic, payload);
@@ -594,11 +587,8 @@ static void MQTT_Task(void *argument)
     }
     else
     {
-      // No data received in 65 seconds - send heartbeat or handle timeout
-      // printf("MQTT: No sensor data received in 65 seconds\r\n");
-
-      // Optional: Send a status message or keep-alive
-      // You could also fall back to direct global variable access here if needed
+      // No data received in timeout period
+      // Optional: Send heartbeat or handle timeout
     }
 
     // Small delay before next iteration
@@ -608,8 +598,13 @@ static void MQTT_Task(void *argument)
 
 void vGpsTaskStart(void *argument)
 {
-  // Initialize GPS
-  memset(gpsRx, 0, GPS_RX_SIZE); // Clear the buffer.
+  SensorData_Combined_t current_sensor_data;
+  SensorData_Combined_Int_t gps_task_sensor_data;
+  
+  memset(gpsRx, 0, GPS_RX_SIZE);
+  memset(&current_sensor_data, 0, sizeof(SensorData_Combined_t));
+  memset(&gps_task_sensor_data, 0, sizeof(SensorData_Combined_Int_t));
+  
   HAL_UART_Receive_DMA(&huart6, gpsRx, GPS_RX_SIZE);
 
   if (lwgps_init(&hgps) != 1)
@@ -618,23 +613,60 @@ void vGpsTaskStart(void *argument)
     vTaskDelete(NULL);
   }
 
-  for(;;)
+  for (;;)
   {
     if (flag == 1)
     {
       lwgps_process(&hgps, gpsRx, GPS_RX_SIZE);
+      current_sensor_data.gps_longitude = hgps.longitude;
+      current_sensor_data.gps_latitude = hgps.latitude;
+      current_sensor_data.gps_altitude = hgps.altitude + hgps.geo_sep;
+      current_sensor_data.gps_speed = hgps.speed * 1.852f;
+      if(current_sensor_data.gps_longitude != 0 && current_sensor_data.gps_altitude != 0){
+        convert_combined_sensor_data_to_int_optimized(&current_sensor_data, &gps_task_sensor_data);
+
+        float speed_kmh = hgps.speed * 1.852f;             // Convert knots to km/h
+        float altitude_msl = hgps.altitude + hgps.geo_sep; // Mean sea level altitude
+
+        // printf("the GPS data: lat=%ld.%04ld&long=%ld.%04ld\r\n", 
+        //   gps_task_sensor_data.gps_lat_whole, gps_task_sensor_data.gps_lat_frac, // Latitude
+        //   gps_task_sensor_data.gps_lon_whole, gps_task_sensor_data.gps_lon_frac);  // Longitude
+        BaseType_t result = DataLogger_UpdateGPSData(
+            hgps.latitude,
+                hgps.longitude,
+                altitude_msl,
+                speed_kmh);
+
+        if (result != pdTRUE)
+        {
+          printf("GPS: Failed to send data to datalogger\r\n");
+        }
+      }
+          // // Send GPS data to datalogger if valid
+          // if (hgps.is_valid)
+          // {
+
+      // }
+      // else
+      // {
+      //   // Send invalid GPS data to clear previous valid data
+      //   DataLogger_UpdateGPSData(0.0f, 0.0f, 0.0f, 0.0f);
+      // }
+      
       printf("---\r\n");
       printf("Valid status: %d\r\n", hgps.is_valid);
       printf("Time: %02d:%02d:%02d\r\n", hgps.hours, hgps.minutes, hgps.seconds);
-      printf("Latitude: %f degrees\r\n", hgps.latitude);
-      printf("Longitude: %f degrees\r\n", hgps.longitude);
-      printf("Altitude: %f meters\r\n", hgps.altitude + hgps.geo_sep);
-      printf("Speed: %.2f km/h\r\n", hgps.speed * 1.852);
+      printf("Latitude Float: %f\r\n", hgps.latitude);
+      printf("Longitude Float: %f\r\n", hgps.longitude);
+      printf("Altitude Float: %f\r\n", hgps.altitude + hgps.geo_sep);
+      printf("Speed Float: %f\r\n", hgps.speed * 1.852f);
+      printf("Dop: %f, %f, %f\r\n", hgps.dop_h, hgps.dop_v, hgps.dop_v);
+      // printf("Latitude: %ld.%04ld degrees\r\n", gps_task_sensor_data.gps_lat_whole, gps_task_sensor_data.gps_lat_frac);
+      // printf("Longitude: %ld.%04ld degrees\r\n", gps_task_sensor_data.gps_lon_whole, gps_task_sensor_data.gps_lon_frac);
       flag = 0;
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
-  // GPS task code here
 }
 
 /* USER CODE END 4 */

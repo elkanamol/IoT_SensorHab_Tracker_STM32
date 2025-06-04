@@ -41,7 +41,7 @@ void convert_mpu6050_data_to_int_optimized(const MPU6050_Data_t *float_data, MPU
 }
 
 /**
- * @brief Optimized combined sensor data conversion
+ * @brief Optimized combined sensor data conversion (now includes GPS)
  */
 void convert_combined_sensor_data_to_int_optimized(const SensorData_Combined_t *float_data, 
                                                    SensorData_Combined_Int_t *int_data)
@@ -88,6 +88,31 @@ void convert_combined_sensor_data_to_int_optimized(const SensorData_Combined_t *
         ZERO_SENSOR_FIELDS(int_data->mpu_gyro_z_whole, int_data->mpu_gyro_z_frac);
         ZERO_SENSOR_FIELDS(int_data->mpu_temp_whole, int_data->mpu_temp_frac);
         int_data->mpu_valid = 0;
+    }
+    
+    // Convert GPS data (NEW)
+    if (float_data->gps_valid || float_data->gps_latitude > 0) {
+        // Latitude and Longitude (6 decimal places for high precision)
+        CONVERT_SENSOR_FIELD(float_data->gps_latitude, int_data->gps_lat_whole, int_data->gps_lat_frac, 1000000);
+        CONVERT_SENSOR_FIELD(float_data->gps_longitude, int_data->gps_lon_whole, int_data->gps_lon_frac, 1000000);
+        
+        // Altitude (2 decimal places)
+        CONVERT_SENSOR_FIELD(float_data->gps_altitude, int_data->gps_alt_whole, int_data->gps_alt_frac, 100);
+        
+        // Speed (2 decimal places)
+        CONVERT_SENSOR_FIELD(float_data->gps_speed, int_data->gps_speed_whole, int_data->gps_speed_frac, 100);
+        
+        // Copy satellite count and validity
+        int_data->gps_satellites = float_data->gps_satellites;
+        int_data->gps_valid = 1;
+    } else {
+        // Zero all GPS fields
+        ZERO_SENSOR_FIELDS(int_data->gps_lat_whole, int_data->gps_lat_frac);
+        ZERO_SENSOR_FIELDS(int_data->gps_lon_whole, int_data->gps_lon_frac);
+        ZERO_SENSOR_FIELDS(int_data->gps_alt_whole, int_data->gps_alt_frac);
+        ZERO_SENSOR_FIELDS(int_data->gps_speed_whole, int_data->gps_speed_frac);
+        int_data->gps_satellites = 0;
+        int_data->gps_valid = 0;
     }
     
     int_data->timestamp = float_data->timestamp;
