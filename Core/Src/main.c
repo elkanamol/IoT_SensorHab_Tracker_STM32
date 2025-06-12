@@ -455,7 +455,6 @@ static void MQTT_Task(void *argument)
   RC76XX_Result_t res;
   TickType_t delay = pdMS_TO_TICKS(20000);
   SensorData_Combined_t sensor_data;
-  SensorData_Combined_Int_t sensor_int_data;
 
   // Register all URC handlers
   res = RC76XX_RegisterURCHandlers(&mqttHandle);

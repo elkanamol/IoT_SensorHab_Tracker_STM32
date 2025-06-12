@@ -7,6 +7,7 @@
 #include "task.h"
 #include "queue.h"
 #include "sensor_conversions.h"
+#include <string.h>
 
 // Private variables
 static uint32_t ring_buffer_write_address = RING_BUFFER_START_ADDRESS;
@@ -97,6 +98,10 @@ static uint8_t DataLogger_Initialize(void)
  */
 static void DataLogger_InitializeRecord(SensorData_Combined_t *record)
 {
+    if (record == NULL) {
+        printf("DataLogger: Invalid record pointer\r\n");
+        return;
+    }
     memset(record, 0xFF, sizeof(SensorData_Combined_t));
     
     // Set default values for non-0xFF fields
@@ -181,6 +186,10 @@ static void DataLogger_SaveCurrentDataToFlash(void)
  */
 BaseType_t DataLogger_UpdateBME280Data(struct bme280_data *bme_data)
 {
+    if (bme_data == NULL) {
+        printf("DataLogger: Invalid BME280 data pointer\r\n");
+        return pdFALSE;
+    }
     SensorUpdateMessage_t message = {
         .type = SENSOR_UPDATE_BME280,
         .timestamp = HAL_GetTick(),
@@ -233,6 +242,10 @@ BaseType_t DataLogger_ForceSave(void)
  */
 BaseType_t DataLogger_UpdateGPSData(float lat, float lon, float alt, float speed)
 {
+    if (lat < -90.0f || lat > 90.0f || lon < -180.0f || lon > 180.0f) {
+        printf("DataLogger: Invalid GPS coordinates: lat=%f, lon=%f\r\n", lat, lon);
+        return pdFALSE;
+    }
     SensorUpdateMessage_t message = {
         .type = SENSOR_UPDATE_GPS,
         .timestamp = HAL_GetTick(),
@@ -249,6 +262,10 @@ BaseType_t DataLogger_UpdateGPSData(float lat, float lon, float alt, float speed
  */
 static void DataLogger_ProcessSensorUpdate(SensorUpdateMessage_t *message)
 {
+    if (message == NULL) {
+        printf("DataLogger: Received NULL message\r\n");
+        return;
+    }
     switch (message->type)
     {
         case SENSOR_UPDATE_BME280:
@@ -306,10 +323,11 @@ static void DataLogger_CheckPeriodicSave(void)
     TickType_t current_time = xTaskGetTickCount();
     
     // Save every 10 seconds if we have valid data
-    if ((current_time - last_flash_save) >= pdMS_TO_TICKS(1000) && 
-        (current_sensor_data.bme_valid || current_sensor_data.mpu_valid || current_sensor_data.gps_valid))
-    {
-        DataLogger_SaveCurrentDataToFlash();
+    if ((current_time - last_flash_save) >=
+            pdMS_TO_TICKS(MAINTENANCE_PERIODIC_CHECK_MS) &&
+        (current_sensor_data.bme_valid || current_sensor_data.mpu_valid ||
+         current_sensor_data.gps_valid)) {
+      DataLogger_SaveCurrentDataToFlash();
     }
 }
 
@@ -393,7 +411,7 @@ static void DataLogger_FlushSectorBuffer(void)
     uint32_t used_bytes = records_in_buffer * sizeof(SensorData_Combined_t);
     
     printf("DataLogger: Flushing sector: %d records (%lu bytes) at 0x%08lX\r\n", 
-           records_in_buffer, used_bytes, current_sector_address);
+           records_in_buffer, (unsigned long)used_bytes, (unsigned long)current_sector_address);
     
     // Fill remaining buffer with 0xFF
     if (used_bytes < SECTOR_BUFFER_SIZE) {
@@ -448,7 +466,7 @@ static void DataLogger_FindWritePosition(void)
             current_sector_address = addr;
             ring_buffer_write_address = addr;
             found_empty = true;
-            printf("DataLogger: Found empty sector at 0x%08lX\r\n", addr);
+            printf("DataLogger: Found empty sector at 0x%08lX\r\n", (unsigned long)addr);
             break;
         }
     }
@@ -469,13 +487,13 @@ static void DataLogger_PeriodicMaintenance(void)
     maintenance_counter++;
     
     // Force flush every 60 seconds if we have buffered records
-    if (maintenance_counter % 60 == 0 && records_in_buffer > 0) {
+    if ((maintenance_counter % MAINTENANCE_FLUSH_INTERVAL_SEC == 0 )&& (records_in_buffer > 0)) {
         printf("DataLogger: Periodic maintenance - flushing %d buffered records\r\n", records_in_buffer);
         DataLogger_FlushSectorBuffer();
     }
     
     // Print status every 120 seconds
-    if (maintenance_counter % 120 == 0) {
+    if (maintenance_counter % MAINTENANCE_STATUS_INTERVAL_SEC == 0) {
         DataLogger_PrintStatus();
     }
 }
@@ -486,11 +504,11 @@ static void DataLogger_PeriodicMaintenance(void)
 static void DataLogger_PrintStatus(void)
 {
     printf("\r\n=== DataLogger Status ===\r\n");
-    printf("Write Address: 0x%08lX\r\n", ring_buffer_write_address);
-    printf("Current Sector: 0x%08lX\r\n", current_sector_address);
+    printf("Write Address: 0x%08lX\r\n", (unsigned long)ring_buffer_write_address);
+    printf("Current Sector: 0x%08lX\r\n", (unsigned long)current_sector_address);
     printf("Records in Buffer: %d/%d\r\n", records_in_buffer, RECORDS_PER_SECTOR);
-    printf("Total Records Written: %lu\r\n", total_records_written);
-    printf("Current Record ID: %lu\r\n", record_counter);
+    printf("Total Records Written: %lu\r\n", (unsigned long)total_records_written);
+    printf("Current Record ID: %lu\r\n", (unsigned long)record_counter);
     printf("BME280 Valid: %s\r\n", current_sensor_data.bme_valid ? "Yes" : "No");
     printf("MPU6050 Valid: %s\r\n", current_sensor_data.mpu_valid ? "Yes" : "No");
     printf("GPS Valid: %s (%d sats)\r\n", current_sensor_data.gps_valid ? "Yes" : "No", current_sensor_data.gps_satellites);

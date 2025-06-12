@@ -52,17 +52,17 @@ static uint8_t mpu6050_read_data(SemaphoreHandle_t i2c_mutex, MPU6050_Data_t *da
  * @brief Initialize MPU6050 sensor with I2C mutex protection
  * @return 0 if successful, 1 if failed
  */
-static uint8_t mpu6050_init_sensor(SemaphoreHandle_t i2c_mutex)
+static uint8_t mpu6050_init_sensor(void)
 {
     uint8_t result = 1;  // Assume failure
 
-    vTaskDelay(pdMS_TO_TICKS(200));
+    vTaskDelay(pdMS_TO_TICKS(MPU6050_INIT_DELAY_MS));
     result = mpu6050_basic_init(MPU6050_ADDRESS_AD0_LOW);
     // If first attempt fails, try once more with longer delay
     if (result != 0)
     {
         printf("MPU6050: First init attempt failed, retrying...\r\n");
-        vTaskDelay(pdMS_TO_TICKS(500)); // Longer delay
+        vTaskDelay(pdMS_TO_TICKS(MPU6050_RETRY_DELAY_MS)); // Longer delay
         result = mpu6050_basic_init(MPU6050_ADDRESS_AD0_LOW);
     }
     return result;
@@ -99,13 +99,13 @@ void MPU6050_Task_Start(void *argument)
     //     printf("MPU6050: Non-blocking take failed (expected if BME280 has it)\r\n");
     // }
     
-    vTaskDelay(pdMS_TO_TICKS(2000)); // Wait longer to let BME280 finish init
+    vTaskDelay(pdMS_TO_TICKS(MPU6050_STARTUP_DELAY_MS)); // Wait longer to let BME280 finish init
     
     printf("MPU6050: Attempting to take mutex with timeout...\r\n");
     
     // Use timeout instead of portMAX_DELAY for debugging
-    if (xSemaphoreTake(MPU6050_Task_Handle.mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
-        printf("MPU6050: Failed to take I2C mutex within 5 seconds\r\n");
+    if (xSemaphoreTake(MPU6050_Task_Handle.mutex, pdMS_TO_TICKS(MPU6050_MUTEX_TIMEOUT_MS)) != pdTRUE) {
+        printf("MPU6050: Failed to take I2C mutex within timeout\r\n");
         vTaskDelete(NULL);
         return;
     }
@@ -113,7 +113,7 @@ void MPU6050_Task_Start(void *argument)
     printf("MPU6050: Successfully acquired mutex!\r\n");
     
     // Initialize sensor
-    if (mpu6050_init_sensor(MPU6050_Task_Handle.mutex) != 0) {
+    if (mpu6050_init_sensor() != 0) {
         printf("MPU6050: ERROR - Initialization failed\r\n");
         xSemaphoreGive(MPU6050_Task_Handle.mutex);
         vTaskDelete(NULL);
@@ -163,43 +163,14 @@ void MPU6050_Task_Start(void *argument)
 }
 
 
-
-/**
- * @brief Print MPU6050 sensor data using integer representation
- * @param data Pointer to float sensor data
- */
-void MPU6050_Task_PrintDataInt(const MPU6050_Data_t *data)
-{
-    MPU6050_Data_Int_t int_data;
-    
-    if (data == NULL) {
-        printf("MPU6050: Invalid data\r\n");
-        return;
-    }
-    
-    // Use the existing optimized conversion function
-    convert_mpu6050_data_to_int_optimized(data, &int_data);
-    
-    // Print using integer arithmetic
-    printf("MPU6050 [%lu ms]: Accel(%d.%03d, %d.%03d, %d.%03d)g Gyro(%d.%02d, %d.%02d, %d.%02d)dps Temp: %d.%02d°C\r\n",
-           int_data.timestamp,
-           int_data.accel_x_whole, int_data.accel_x_frac,
-           int_data.accel_y_whole, int_data.accel_y_frac,
-           int_data.accel_z_whole, int_data.accel_z_frac,
-           int_data.gyro_x_whole, int_data.gyro_x_frac,
-           int_data.gyro_y_whole, int_data.gyro_y_frac,
-           int_data.gyro_z_whole, int_data.gyro_z_frac,
-           int_data.temp_whole, int_data.temp_frac);
-}
-
 /**
  * @brief Print sensor data to console (keep original for reference)
  * @param data Pointer to sensor data
  */
 void MPU6050_Task_PrintData(const MPU6050_Data_t *data)
 {
-    printf("MPU6050 [%lu ms]: Accel(%.2f, %.2f, %.2f)g Gyro(%.1f, %.1f, %.1f)dps Temp:%.1f°C\r\n",
-           data->timestamp,
+    printf("MPU6050 [%d ms]: Accel(%.2f, %.2f, %.2f)g Gyro(%.1f, %.1f, %.1f)dps Temp:%.1f°C\r\n",
+           (int)data->timestamp,
            data->accel_x, data->accel_y, data->accel_z,
            data->gyro_x, data->gyro_y, data->gyro_z,
            data->temperature);

@@ -7,7 +7,6 @@
 #include "driver_w25qxx_basic.h"
 #include "FreeRTOS.h"
 #include "queue.h"
-#include "lwgps.h"  // Add GPS include
 
 // Ring buffer configuration (64KB FIFO)
 #define FLASH_RING_BUFFER_SIZE (64 * 1024)
@@ -27,6 +26,10 @@
 
 // MQTT transmission interval
 #define MQTT_TRANSMISSION_INTERVAL_MS (60 * 1000)  // 60 seconds
+#define MAINTENANCE_FLUSH_INTERVAL_SEC 60
+#define MAINTENANCE_STATUS_INTERVAL_SEC 120
+#define MAINTENANCE_PERIODIC_CHECK_MS 1000
+
 
 // Sensor update types
 typedef enum {
@@ -131,7 +134,7 @@ void StartDataLoggerTask(void *argument);
 BaseType_t DataLogger_UpdateBME280Data(struct bme280_data *bme_data);
 BaseType_t DataLogger_UpdateMPU6050Data(float ax, float ay, float az, float gx, float gy, float gz, float temp);
 BaseType_t DataLogger_UpdateGPSData(float lat, float lon, float alt, float speed);
-BaseType_t DataLogger_QueueSystemEvent(const char *event_text);
+// BaseType_t DataLogger_QueueSystemEvent(const char *event_text);
 BaseType_t DataLogger_ForceSave(void);
 
 #endif /* DATALOGGER_H */

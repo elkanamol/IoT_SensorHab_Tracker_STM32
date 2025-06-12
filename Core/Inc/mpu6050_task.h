@@ -10,6 +10,10 @@
 
 // Task configuration
 #define MPU6050_READ_PERIOD_MS 1000  // Read every 1 second
+#define MPU6050_INIT_DELAY_MS 200
+#define MPU6050_RETRY_DELAY_MS 500
+#define MPU6050_STARTUP_DELAY_MS 2000
+#define MPU6050_MUTEX_TIMEOUT_MS 5000
 
 // MPU6050 data structure (float)
 typedef struct {
@@ -45,8 +49,8 @@ typedef struct {
 // Public functions
 void MPU6050_Task_Start(void *argument);
 void MPU6050_Task_PrintData(const MPU6050_Data_t *data);
-void MPU6050_Task_PrintDataInt(const MPU6050_Data_t *data);
-void convert_mpu6050_data_to_int(const MPU6050_Data_t *float_data, MPU6050_Data_Int_t *int_data);
-void convert_mpu6050_data_to_int_optimized(const MPU6050_Data_t *float_data, MPU6050_Data_Int_t *int_data);
+//void MPU6050_Task_PrintDataInt(const MPU6050_Data_t *data);
+// void convert_mpu6050_data_to_int(const MPU6050_Data_t *float_data, MPU6050_Data_Int_t *int_data);
+// void convert_mpu6050_data_to_int_optimized(const MPU6050_Data_t *float_data, MPU6050_Data_Int_t *int_data);
 
 #endif // MPU6050_TASK_H

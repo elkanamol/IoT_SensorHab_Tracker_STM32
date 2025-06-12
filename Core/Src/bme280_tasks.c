@@ -28,16 +28,17 @@ void StartBme280Task(void *argument)
 {
     SemaphoreHandle_t i2c_mutex = (SemaphoreHandle_t)argument;
     
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    printf("Starting BME280 task...\r\n");
-    
-    if (i2c_mutex == NULL)
-    {
+    // Validate argument before any delays
+    if (i2c_mutex == NULL) {
         printf("BME280: I2C mutex is NULL\r\n");
         vTaskDelete(NULL);
         return;
     }
-
+    
+    // Use named constant for startup delay
+    vTaskDelay(pdMS_TO_TICKS(BME280_STARTUP_DELAY_MS));
+    printf("Starting BME280 task...\r\n");
+    
     if (xSemaphoreTake(i2c_mutex, portMAX_DELAY) != pdTRUE)
     {
         printf("BME280: Failed to take I2C mutex\r\n");
@@ -121,7 +122,7 @@ void StartBme280Task(void *argument)
         }
         
         // Wait before next measurement (1 second interval)
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(BME280_MEASUREMENT_INTERVAL_MS));
     }
 }
 
@@ -157,7 +158,7 @@ int8_t BME280_InitializeSensor(void)
     }
 
     printf("BME280 sensor initialized successfully. Chip ID: 0x%X\r\n", bme_device.chip_id);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(BME280_CONFIG_DELAY_MS));
     return BME280_OK;
 }
 
@@ -178,7 +179,7 @@ int8_t BME280_ConfigureSettings(void)
         return rslt;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(BME280_CONFIG_DELAY_MS));
 
     // Configure optimal settings for environmental monitoring
     settings.osr_h = BME280_OVERSAMPLING_1X;   // Humidity: 1x (fast, adequate)
@@ -198,6 +199,11 @@ int8_t BME280_ConfigureSettings(void)
  */
 int8_t BME280_ApplySettings(struct bme280_settings *settings)
 {
+    if (settings == NULL) {
+        printf("BME280: Invalid settings pointer\r\n");
+        return BME280_E_NULL_PTR;
+    }
+    
     int8_t rslt;
 
     // Apply humidity settings first (BME280 requirement)
@@ -207,7 +213,7 @@ int8_t BME280_ApplySettings(struct bme280_settings *settings)
         printf("Failed to set humidity settings. Error: %d\r\n", rslt);
         return rslt;
     }
-    vTaskDelay(pdMS_TO_TICKS(5));
+    vTaskDelay(pdMS_TO_TICKS(BME280_SETTINGS_DELAY_MS));
 
     // Apply temperature and pressure settings
     rslt = bme280_set_sensor_settings(BME280_SEL_OSR_TEMP | BME280_SEL_OSR_PRESS, settings, &bme_device);
@@ -216,7 +222,7 @@ int8_t BME280_ApplySettings(struct bme280_settings *settings)
         printf("Failed to set temp/press settings. Error: %d\r\n", rslt);
         return rslt;
     }
-    vTaskDelay(pdMS_TO_TICKS(5));
+    vTaskDelay(pdMS_TO_TICKS(BME280_SETTINGS_DELAY_MS));
 
     // Apply filter and standby settings
     rslt = bme280_set_sensor_settings(BME280_SEL_FILTER | BME280_SEL_STANDBY, settings, &bme_device);
@@ -247,7 +253,8 @@ int8_t BME280_ValidateFirstMeasurement(void)
     }
 
     printf("Waiting for first measurement to complete...\r\n");
-    vTaskDelay(pdMS_TO_TICKS(100)); // Wait for first measurement
+    vTaskDelay(pdMS_TO_TICKS(
+        BME280_FIRST_MEASUREMENT_DELAY_MS)); // Wait for first measurement
 
     // Take first measurement to validate everything works
     rslt = bme280_get_sensor_data(BME280_ALL, &bme_comp_data, &bme_device);
@@ -278,7 +285,7 @@ int8_t BME280_TakeForcedMeasurement(void)
 
     // Fixed delay based on oversampling settings
     // T×2 + P×4 + H×1 + margins = ~50ms covers all cases
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(BME280_FORCED_MODE_DELAY_MS));
 
     // Read measurement data
     rslt = bme280_get_sensor_data(BME280_ALL, &bme_comp_data, &bme_device);
@@ -291,17 +298,17 @@ void BME280_PrintMeasurementData(void)
            bme_comp_data.temperature, bme_comp_data.pressure, bme_comp_data.humidity);
 }
 
-/**
- * @brief Print BME280 measurement data for debugging
- */
-void BME280_PrintMeasurementData_int(void)
-{
-    bme_calc_data_int_t bme_calc_data;
-    convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
+// /**
+//  * @brief Print BME280 measurement data for debugging
+//  */
+// void BME280_PrintMeasurementData_int(void)
+// {
+//     bme_calc_data_int_t bme_calc_data;
+//     convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
 
-    printf("BME280: %ld.%02ld°C, %lu.%02lu hPa, %lu.%02lu%%\r\n", 
-           bme_calc_data.temp_whole, bme_calc_data.temp_frac,
-           bme_calc_data.press_whole, bme_calc_data.press_frac,
-           bme_calc_data.hum_whole, bme_calc_data.hum_frac);
-}
+//     printf("BME280: %d.%02d°C, %d.%02d hPa, %d.%02d%%\r\n",
+//            bme_calc_data.temp_whole, bme_calc_data.temp_frac,
+//            bme_calc_data.press_whole, bme_calc_data.press_frac,
+//            bme_calc_data.hum_whole, bme_calc_data.hum_frac);
+// }
 
