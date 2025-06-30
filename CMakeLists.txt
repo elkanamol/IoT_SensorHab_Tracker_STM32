@@ -53,7 +53,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/uAT/Src/rc76xx_mqtt.c
     Drivers/BME280/Src/bme280_porting.c
     Drivers/BME280/Src/bme280.c
-    Core/Src/w25qxx_hal.c
+    # Core/Src/w25qxx_hal.c
     Core/Src/datalogger.c
     Core/Src/bme280_tasks.c
     Core/Src/mpu6050_task.c

@@ -39,7 +39,7 @@
 // #include "bme280_porting.h"
 #include "datalogger.h"
 
-#include "w25qxx_hal.h"
+// #include "w25qxx_hal.h"
 #include "driver_w25qxx_interface.h"
 #include "driver_w25qxx_basic.h"
 #include "mpu6050_task.h"
