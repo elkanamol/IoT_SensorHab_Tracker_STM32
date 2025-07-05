@@ -3,7 +3,6 @@
 
 #include "main.h"
 #include "bme280.h"
-#include "w25qxx_hal.h"
 #include "driver_w25qxx_basic.h"
 #include "FreeRTOS.h"
 #include "queue.h"
