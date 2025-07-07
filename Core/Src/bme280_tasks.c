@@ -1,10 +1,12 @@
 #include "bme280_tasks.h"
+#include "bme280_defs.h"
 #include "bme280_porting.h" 
 #include "bme280.h"
 #include "sensor_conversions.h" 
 #include "main.h"
 #include "stdio.h"
 #include "datalogger.h"
+#include "config.h"
 
 // Define global variables here (not in header!)
 struct bme280_dev bme_device;
@@ -36,7 +38,7 @@ void StartBme280Task(void *argument)
     }
     
     // Use named constant for startup delay
-    vTaskDelay(pdMS_TO_TICKS(BME280_STARTUP_DELAY_MS));
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_BME280_STARTUP_DELAY_MS));
     printf("Starting BME280 task...\r\n");
     
     if (xSemaphoreTake(i2c_mutex, portMAX_DELAY) != pdTRUE)
@@ -122,7 +124,7 @@ void StartBme280Task(void *argument)
         }
         
         // Wait before next measurement (1 second interval)
-        vTaskDelay(pdMS_TO_TICKS(BME280_MEASUREMENT_INTERVAL_MS));
+        vTaskDelay(pdMS_TO_TICKS(CONFIG_BME280_MEASUREMENT_INTERVAL_MS));
     }
 }
 
@@ -182,10 +184,10 @@ int8_t BME280_ConfigureSettings(void)
     vTaskDelay(pdMS_TO_TICKS(BME280_CONFIG_DELAY_MS));
 
     // Configure optimal settings for environmental monitoring
-    settings.osr_h = BME280_OVERSAMPLING_1X;   // Humidity: 1x (fast, adequate)
-    settings.osr_p = BME280_OVERSAMPLING_4X;   // Pressure: 4x (higher precision)
-    settings.osr_t = BME280_OVERSAMPLING_2X;   // Temperature: 2x (good balance)
-    settings.filter = BME280_FILTER_COEFF_OFF; // No filtering (real-time data)
+    settings.osr_h = CONFIG_BME280_OVERSAMPLING_HUMIDITY;   // Humidity: 1x (fast, adequate)
+    settings.osr_p = CONFIG_BME280_OVERSAMPLING_PRESSURE;   // Pressure: 4x (higher precision)
+    settings.osr_t = CONFIG_BME280_OVERSAMPLING_TEMP;   // Temperature: 2x (good balance)
+    settings.filter = CONFIG_BME280_FILTER_COEFFICIENT; // No filtering (real-time data)
     settings.standby_time = BME280_STANDBY_TIME_1000_MS;
 
     printf("Applying BME280 settings...\r\n");

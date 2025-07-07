@@ -7,6 +7,8 @@
 #include "semphr.h"
 #include <stdio.h>
 
+#include "config.h"
+
 // External I2C mutex
 // extern SemaphoreHandle_t g_i2c_mutex = NULL;
 
@@ -57,13 +59,13 @@ static uint8_t mpu6050_init_sensor(void)
     uint8_t result = 1;  // Assume failure
 
     vTaskDelay(pdMS_TO_TICKS(MPU6050_INIT_DELAY_MS));
-    result = mpu6050_basic_init(MPU6050_ADDRESS_AD0_LOW);
+    result = mpu6050_basic_init(CONFIG_MPU6050_I2C_ADDRESS);
     // If first attempt fails, try once more with longer delay
     if (result != 0)
     {
         printf("MPU6050: First init attempt failed, retrying...\r\n");
         vTaskDelay(pdMS_TO_TICKS(MPU6050_RETRY_DELAY_MS)); // Longer delay
-        result = mpu6050_basic_init(MPU6050_ADDRESS_AD0_LOW);
+        result = mpu6050_basic_init(CONFIG_MPU6050_I2C_ADDRESS);
     }
     return result;
 }
@@ -88,28 +90,20 @@ void MPU6050_Task_Start(void *argument)
         return;
     }
     
-    // // Additional validation - check if it's a valid FreeRTOS object
-    // // Try a non-blocking take first
-    // printf("MPU6050: Testing mutex with non-blocking take...\r\n");
-    // BaseType_t test_result = xSemaphoreTake(MPU6050_Task_Handle.mutex, 0);
-    // if (test_result == pdTRUE) {
-    //     printf("MPU6050: Non-blocking take successful, giving back...\r\n");
-    //     xSemaphoreGive(MPU6050_Task_Handle.mutex);
-    // } else {
-    //     printf("MPU6050: Non-blocking take failed (expected if BME280 has it)\r\n");
-    // }
     
-    vTaskDelay(pdMS_TO_TICKS(MPU6050_STARTUP_DELAY_MS)); // Wait longer to let BME280 finish init
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_MPU6050_STARTUP_DELAY_MS)); // Wait longer to let BME280 finish init
     
     printf("MPU6050: Attempting to take mutex with timeout...\r\n");
     
     // Use timeout instead of portMAX_DELAY for debugging
-    if (xSemaphoreTake(MPU6050_Task_Handle.mutex, pdMS_TO_TICKS(MPU6050_MUTEX_TIMEOUT_MS)) != pdTRUE) {
-        printf("MPU6050: Failed to take I2C mutex within timeout\r\n");
-        vTaskDelete(NULL);
-        return;
+    if (xSemaphoreTake(MPU6050_Task_Handle.mutex,
+                       pdMS_TO_TICKS(CONFIG_MPU6050_MUTEX_TIMEOUT_MS)) !=
+        pdTRUE) {
+      printf("MPU6050: Failed to take I2C mutex within timeout\r\n");
+      vTaskDelete(NULL);
+      return;
     }
-    
+
     printf("MPU6050: Successfully acquired mutex!\r\n");
     
     // Initialize sensor
@@ -158,7 +152,7 @@ void MPU6050_Task_Start(void *argument)
         }
         
         // Wait for next cycle
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(MPU6050_READ_PERIOD_MS));
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(CONFIG_MPU6050_READ_PERIOD_MS));
     }
 }
 
