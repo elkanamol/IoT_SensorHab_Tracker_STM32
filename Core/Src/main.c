@@ -62,9 +62,15 @@
 #define RECORDS_PER_PAGE (W25Q64_PAGE_SIZE / sizeof(BME280_Record_t))
 
 // Queue configuration
+<<<<<<< Updated upstream
 #define QUEUE_SEND_TIMEOUT_MS 1000
 #define DATA_LOGGER_QUEUE_SIZE 20
 #define MAX_QUEUE_WAIT_MS 1000
+=======
+//#define QUEUE_SEND_TIMEOUT_MS 1000
+// #define DATA_LOGGER_QUEUE_SIZE 20
+//#define MAX_QUEUE_WAIT_MS 1000
+>>>>>>> Stashed changes
 
 #define GPS_RX_SIZE 512
 /* USER CODE END PD */
@@ -85,7 +91,7 @@ static RC76XX_Handle_t mqttHandle;
 // struct bme280_data bme_comp_data;
 
 // lwgps variables
-uint8_t flag = 0;
+volatile uint8_t flag = 0;
 uint8_t gpsRx[GPS_RX_SIZE]; 
 lwgps_t hgps;
 
@@ -220,7 +226,7 @@ int main(void)
   MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  // Initialize uAT parser on huart3
+  // Initialize uAT parser on huart2
   uAT_Result_t result = uAT_Init(&huart2);
   if (result != UAT_OK)
   {

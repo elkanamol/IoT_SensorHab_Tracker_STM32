@@ -62,6 +62,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/w25qxx/Src/driver_w25qxx.c
     Drivers/w25qxx/Src/driver_w25qxx_advance.c
     Drivers/w25qxx/Src/driver_w25qxx_basic.c
+    # If your code still requires a HAL adapter for w25qxx, add it here, e.g.:
+    # Drivers/w25qxx/Src/w25qxx_hal_adapter.c
     Drivers/MPU6050/Src/driver_mpu6050_interface.c
     Drivers/MPU6050/Src/driver_mpu6050.c
     Drivers/MPU6050/Src/driver_mpu6050_basic.c

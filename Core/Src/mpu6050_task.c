@@ -21,7 +21,7 @@ static uint8_t mpu6050_read_data(SemaphoreHandle_t i2c_mutex, MPU6050_Data_t *da
     uint8_t result = 1;  // Assume failure
     
     // Take I2C mutex
-    if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+    if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(CONFIG_MPU6050_MUTEX_TIMEOUT_MS)) == pdTRUE) {
         
         // Read accelerometer and gyroscope
         if (mpu6050_basic_read(accel, gyro) == 0) {
@@ -56,14 +56,24 @@ static uint8_t mpu6050_init_sensor(void)
 {
     uint8_t result = 1;  // Assume failure
 
+<<<<<<< Updated upstream
     vTaskDelay(pdMS_TO_TICKS(MPU6050_INIT_DELAY_MS));
     result = mpu6050_basic_init(MPU6050_ADDRESS_AD0_LOW);
+=======
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_MPU6050_STARTUP_DELAY_MS));
+    result = mpu6050_basic_init(CONFIG_MPU6050_I2C_ADDRESS);
+>>>>>>> Stashed changes
     // If first attempt fails, try once more with longer delay
     if (result != 0)
     {
         printf("MPU6050: First init attempt failed, retrying...\r\n");
+<<<<<<< Updated upstream
         vTaskDelay(pdMS_TO_TICKS(MPU6050_RETRY_DELAY_MS)); // Longer delay
         result = mpu6050_basic_init(MPU6050_ADDRESS_AD0_LOW);
+=======
+        vTaskDelay(pdMS_TO_TICKS(CONFIG_MPU6050_RETRY_DELAY_MS)); // Longer delay
+        result = mpu6050_basic_init(CONFIG_MPU6050_I2C_ADDRESS);
+>>>>>>> Stashed changes
     }
     return result;
 }
