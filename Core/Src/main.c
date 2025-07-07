@@ -27,12 +27,14 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "config.h"
+#include "mqtt_secrets.h"
 #include "rc76xx_mqtt.h"
 #include "stdio.h"
-#include "uat_freertos.h" // your parser header
-#include "string.h"
-#include "mqtt_secrets.h"
 #include "stdlib.h"
+#include "string.h"
+#include "uat_freertos.h" // your parser header
+
 
 #include "bme280_tasks.h"
 // #include "bme280.h"
@@ -56,7 +58,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 // Ring buffer configuration (64KB FIFO)
-#define FLASH_RING_BUFFER_SIZE (64 * 1024)  // 64KB - can be changed later
+// #define FLASH_RING_BUFFER_SIZE (64 * 1024)  // 64KB - can be changed later
 #define RING_BUFFER_START_ADDRESS (DATA_START_ADDRESS)
 #define RING_BUFFER_END_ADDRESS (RING_BUFFER_START_ADDRESS + FLASH_RING_BUFFER_SIZE)
 #define RECORDS_PER_PAGE (W25Q64_PAGE_SIZE / sizeof(BME280_Record_t))
@@ -64,7 +66,7 @@
 // Queue configuration
 <<<<<<< Updated upstream
 #define QUEUE_SEND_TIMEOUT_MS 1000
-#define DATA_LOGGER_QUEUE_SIZE 20
+// #define DATA_LOGGER_QUEUE_SIZE 20
 #define MAX_QUEUE_WAIT_MS 1000
 =======
 //#define QUEUE_SEND_TIMEOUT_MS 1000
@@ -266,9 +268,9 @@ int main(void)
   // Create uAT parser task
   TaskStatus = xTaskCreate(uAT_Task,
                            "uAT_Task",
-                           512, // stack depth in words
+                           CONFIG_TASK_STACK_SIZE_UAT,
                            NULL,
-                           tskIDLE_PRIORITY + 1,
+                           CONFIG_TASK_PRIORITY_NORMAL,
                            NULL);
   configASSERT(TaskStatus == pdPASS);
   printf("uAT task created\n");
@@ -283,9 +285,9 @@ int main(void)
 
   TaskStatus = xTaskCreate(MQTT_Task,
                            "MQTT_Task",
-                           512 * 2,
+                           CONFIG_TASK_STACK_SIZE_MQTT,
                            NULL,
-                           tskIDLE_PRIORITY + 1,
+                           CONFIG_TASK_PRIORITY_NORMAL,
                            NULL);
   configASSERT(TaskStatus == pdPASS);
   printf("MQTT task created\n");
@@ -293,39 +295,40 @@ int main(void)
   // Create the BME280 task
   TaskStatus = xTaskCreate(StartBme280Task,
                            "BME280_Task",
-                           512, // Adjust stack size as needed
+                           CONFIG_TASK_STACK_SIZE_BME280, // Adjust stack size as needed
                            (void *)g_i2c_mutex,
-                           tskIDLE_PRIORITY + 1,
+                           CONFIG_TASK_PRIORITY_NORMAL,
                            NULL);
   configASSERT(TaskStatus == pdPASS);
   printf("BME280 task created\n");
   // Create MPU6050 task
   TaskStatus = xTaskCreate(MPU6050_Task_Start,
                            "MPU6050",
-                           512,
+                           CONFIG_TASK_STACK_SIZE_MPU6050,
                            (void *)g_i2c_mutex,
-                           tskIDLE_PRIORITY + 1,
+                           CONFIG_TASK_PRIORITY_NORMAL,
                            NULL);
   configASSERT(TaskStatus == pdPASS);
   printf("MPU6050 task created\n");
 
 
   // Create the Data Logger task
-  TaskStatus = xTaskCreate(StartDataLoggerTask,
-                           "DataLogger",
-                           2048, // Larger stack for this task
-                           NULL,
-                           tskIDLE_PRIORITY + 1,
-                           NULL);
+  TaskStatus = xTaskCreate(
+                          StartDataLoggerTask, 
+                          "DataLogger",
+                          CONFIG_TASK_STACK_SIZE_DATALOGGER,
+                          NULL, 
+                          CONFIG_TASK_PRIORITY_NORMAL, 
+                          NULL);
   configASSERT(TaskStatus == pdPASS);
   printf("DataLogger task created\n");
 
   // Create the GPS task
   TaskStatus = xTaskCreate(vGpsTaskStart,
                            "GPS_Task",
-                           512,
+                           CONFIG_TASK_STACK_SIZE_GPS,
                            NULL,
-                           tskIDLE_PRIORITY + 1,
+                           CONFIG_TASK_PRIORITY_NORMAL,
                            NULL);
   configASSERT(TaskStatus == pdPASS);
   printf("GPS task created\n");
@@ -502,13 +505,13 @@ static void MQTT_Task(void *argument)
   printf("Network ready, IP=%s\r\n", mqttHandle.ip);
 
   /* 3) Configure MQTT */
-  const char *broker = "mqtt3.thingspeak.com";
-  const uint16_t port = 1883;
-  const char *clientID = SECRET_MQTT_CLIENT_ID;
-  const char *user = SECRET_MQTT_USERNAME;
-  const char *pass = SECRET_MQTT_PASSWORD;
-  const char *subTopic = "channels/2956054/subscribe";
-  const char *pubTopic = "channels/2956054/publish";
+  const char *broker = CONFIG_MQTT_BROKER_HOSTNAME;
+  const uint16_t port = CONFIG_MQTT_BROKER_PORT;
+  const char *clientID = CONFIG_MQTT_CLIENT_ID;
+  const char *user = CONFIG_MQTT_USERNAME;
+  const char *pass = CONFIG_MQTT_PASSWORD;
+  const char *subTopic = CONFIG_MQTT_SUBSCRIBE_TOPIC;
+  const char *pubTopic = CONFIG_MQTT_PUBLISH_TOPIC;
 
   printf("Configuring MQTT %s:%u, ClientID=%s...\r\n", broker, port, clientID);
   res = RC76XX_ConfigMQTT(&mqttHandle, broker, port, clientID, pubTopic, user, pass, false, false, 120);
@@ -561,23 +564,6 @@ static void MQTT_Task(void *argument)
                sensor_data.mpu_accel_x, sensor_data.mpu_accel_y, sensor_data.mpu_accel_z,
                sensor_data.mpu_gyro_x, sensor_data.mpu_gyro_y,
                sensor_data.gps_latitude, sensor_data.gps_longitude);
-
-      // snprintf(payload, sizeof(payload),
-      //          "field1=%ld.%02ld&field2=%lu.%02lu&field3=%lu.%02lu&field4=%d.%03d&field5=%d.%03d&field6=%d.%03d&field7=%d.%03d&field8=%d.%03d&lat=%ld.%06ld&long=%ld.%06ld",
-      //          // BME280 data (fields 1-3)
-      //          sensor_int_data.bme_temp_whole, sensor_int_data.bme_temp_frac,   // Temperature
-      //          sensor_int_data.bme_press_whole, sensor_int_data.bme_press_frac, // Pressure
-      //          sensor_int_data.bme_hum_whole, sensor_int_data.bme_hum_frac,     // Humidity
-      //          // MPU6050 data (fields 4-8)
-      //          sensor_int_data.mpu_accel_x_whole, sensor_int_data.mpu_accel_x_frac,
-      //          sensor_int_data.mpu_accel_y_whole, sensor_int_data.mpu_accel_y_frac,
-      //          sensor_int_data.mpu_accel_z_whole, sensor_int_data.mpu_accel_z_frac,
-      //          sensor_int_data.mpu_gyro_x_whole, sensor_int_data.mpu_gyro_x_frac,
-      //          sensor_int_data.mpu_gyro_y_whole, sensor_int_data.mpu_gyro_y_frac, // Satellites
-      //          // Additional GPS fields
-      //          sensor_int_data.gps_lat_whole, sensor_int_data.gps_lat_frac, // Latitude
-      //          sensor_int_data.gps_lon_whole, sensor_int_data.gps_lon_frac  // Longitude
-      // );
 
       // printf("MQTT: Publishing combined sensor data with GPS\r\n");
       printf("BME280: %s, MPU6050: %s, GPS: %s\r\n",

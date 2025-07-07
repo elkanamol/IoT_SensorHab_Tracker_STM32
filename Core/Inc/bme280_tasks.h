@@ -3,12 +3,15 @@
 
 #include "bme280.h"
 #include "bme280_porting.h"
+<<<<<<< HEAD
 <<<<<<< Updated upstream
 =======
 #include "bme280_tasks.h"
 #include "config.h"
 >>>>>>> Stashed changes
 
+=======
+>>>>>>> 7a8ab737b2e350dd096e98fab5f8517cf1fb63a5
 // External variables (declared here, defined in bme280_tasks.c)
 extern I2C_HandleTypeDef hi2c1;
 extern struct bme280_dev bme_device;
