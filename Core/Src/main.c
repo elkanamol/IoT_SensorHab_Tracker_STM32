@@ -64,15 +64,12 @@
 #define RECORDS_PER_PAGE (W25Q64_PAGE_SIZE / sizeof(BME280_Record_t))
 
 // Queue configuration
-<<<<<<< Updated upstream
 #define QUEUE_SEND_TIMEOUT_MS 1000
 // #define DATA_LOGGER_QUEUE_SIZE 20
 #define MAX_QUEUE_WAIT_MS 1000
-=======
 //#define QUEUE_SEND_TIMEOUT_MS 1000
 // #define DATA_LOGGER_QUEUE_SIZE 20
 //#define MAX_QUEUE_WAIT_MS 1000
->>>>>>> Stashed changes
 
 #define GPS_RX_SIZE 512
 /* USER CODE END PD */

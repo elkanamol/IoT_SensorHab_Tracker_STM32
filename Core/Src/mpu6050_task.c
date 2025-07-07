@@ -58,32 +58,15 @@ static uint8_t mpu6050_init_sensor(void)
 {
     uint8_t result = 1;  // Assume failure
 
-<<<<<<< Updated upstream
-    vTaskDelay(pdMS_TO_TICKS(MPU6050_INIT_DELAY_MS));
-<<<<<<< HEAD
-    result = mpu6050_basic_init(MPU6050_ADDRESS_AD0_LOW);
-=======
     vTaskDelay(pdMS_TO_TICKS(CONFIG_MPU6050_STARTUP_DELAY_MS));
     result = mpu6050_basic_init(CONFIG_MPU6050_I2C_ADDRESS);
->>>>>>> Stashed changes
-=======
-    result = mpu6050_basic_init(CONFIG_MPU6050_I2C_ADDRESS);
->>>>>>> 7a8ab737b2e350dd096e98fab5f8517cf1fb63a5
+
     // If first attempt fails, try once more with longer delay
     if (result != 0)
     {
         printf("MPU6050: First init attempt failed, retrying...\r\n");
-<<<<<<< Updated upstream
-        vTaskDelay(pdMS_TO_TICKS(MPU6050_RETRY_DELAY_MS)); // Longer delay
-<<<<<<< HEAD
-        result = mpu6050_basic_init(MPU6050_ADDRESS_AD0_LOW);
-=======
         vTaskDelay(pdMS_TO_TICKS(CONFIG_MPU6050_RETRY_DELAY_MS)); // Longer delay
         result = mpu6050_basic_init(CONFIG_MPU6050_I2C_ADDRESS);
->>>>>>> Stashed changes
-=======
-        result = mpu6050_basic_init(CONFIG_MPU6050_I2C_ADDRESS);
->>>>>>> 7a8ab737b2e350dd096e98fab5f8517cf1fb63a5
     }
     return result;
 }

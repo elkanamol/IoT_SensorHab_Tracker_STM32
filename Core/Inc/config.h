@@ -33,19 +33,12 @@
 // The depth of the FreeRTOS queue for buffering incoming sensor data
 #define CONFIG_DATALOGGER_QUEUE_SIZE                     20
 
-<<<<<<< HEAD
-// Add missing datalogger queue timeout
-#define CONFIG_DATALOGGER_QUEUE_SEND_TIMEOUT_MS   1000
-
-=======
->>>>>>> 7a8ab737b2e350dd096e98fab5f8517cf1fb63a5
 // Sensor Task Timing Configuration
 // Defines the main polling rate for each sensor task in milliseconds.
 #define CONFIG_BME280_MEASUREMENT_INTERVAL_MS      1000
 #define CONFIG_MPU6050_READ_PERIOD_MS              1000
 
 // Defines initial delays for tasks to allow system stabilization.
-<<<<<<< HEAD
 #define CONFIG_BME280_CONFIG_DELAY_MS              10
 #define CONFIG_BME280_STARTUP_DELAY_MS             2000
 #define CONFIG_MPU6050_STARTUP_DELAY_MS            2000 // Should be > BME280 startup
@@ -54,10 +47,8 @@
 #define CONFIG_BME280_FIRST_MEASUREMENT_DELAY_MS  1000
 #define CONFIG_BME280_FORCED_MODE_DELAY_MS        50
 #define CONFIG_MPU6050_RETRY_DELAY_MS             100
-=======
 #define CONFIG_BME280_STARTUP_DELAY_MS             2000
 #define CONFIG_MPU6050_STARTUP_DELAY_MS            2000 // Should be > BME280 startup
->>>>>>> 7a8ab737b2e350dd096e98fab5f8517cf1fb63a5
 
 // Timeout for MPU6050 task to wait for the shared I2C bus mutex.
 #define CONFIG_MPU6050_MUTEX_TIMEOUT_MS            5000
@@ -93,7 +84,6 @@
 #define CONFIG_TASK_STACK_SIZE_DATALOGGER      (2048)
 #define CONFIG_TASK_STACK_SIZE_GPS             (1536)
 
-<<<<<<< HEAD
 // Add missing BME280 delays (tune as needed)
 #define CONFIG_BME280_SETTINGS_DELAY_MS           10
 #define CONFIG_BME280_FIRST_MEASUREMENT_DELAY_MS  1000
@@ -105,6 +95,4 @@
 // Add missing DATA_START_ADDRESS (adjust as needed for your flash layout)
 //#define DATA_START_ADDRESS                        0x000000
 
-=======
->>>>>>> 7a8ab737b2e350dd096e98fab5f8517cf1fb63a5
 #endif // APP_CONFIG_H
