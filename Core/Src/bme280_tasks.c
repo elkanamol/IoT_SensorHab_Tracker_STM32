@@ -7,6 +7,7 @@
 #include "stdio.h"
 #include "datalogger.h"
 #include "config.h"
+#include "print.h"
 
 // Define global variables here (not in header!)
 struct bme280_dev bme_device;
@@ -32,18 +33,18 @@ void StartBme280Task(void *argument)
     
     // Validate argument before any delays
     if (i2c_mutex == NULL) {
-        printf("BME280: I2C mutex is NULL\r\n");
+        DEBUG_PRINT_ERROR("BME280: I2C mutex is NULL\r\n");
         vTaskDelete(NULL);
         return;
     }
     
     // Use named constant for startup delay
     vTaskDelay(pdMS_TO_TICKS(CONFIG_BME280_STARTUP_DELAY_MS));
-    printf("Starting BME280 task...\r\n");
+    DEBUG_PRINT_DEBUG("Starting BME280 task...\r\n");
     
     if (xSemaphoreTake(i2c_mutex, portMAX_DELAY) != pdTRUE)
     {
-        printf("BME280: Failed to take I2C mutex\r\n");
+        DEBUG_PRINT_ERROR("BME280: Failed to take I2C mutex\r\n");
         vTaskDelete(NULL);
         return;
     }
@@ -51,7 +52,7 @@ void StartBme280Task(void *argument)
     // Initialize BME280 step by step
     if (BME280_InitializeInterface() != BME280_OK)
     {
-        printf("BME280 interface initialization failed\r\n");
+        DEBUG_PRINT_ERROR("BME280 interface initialization failed\r\n");
         xSemaphoreGive(i2c_mutex);  
         vTaskDelete(NULL);
         return;
@@ -59,7 +60,7 @@ void StartBme280Task(void *argument)
 
     if (BME280_InitializeSensor() != BME280_OK)
     {
-        printf("BME280 sensor initialization failed\r\n");
+        DEBUG_PRINT_ERROR("BME280 sensor initialization failed\r\n");
         xSemaphoreGive(i2c_mutex);  
         vTaskDelete(NULL);
         return;
@@ -67,7 +68,7 @@ void StartBme280Task(void *argument)
 
     if (BME280_ConfigureSettings() != BME280_OK)
     {
-        printf("BME280 settings configuration failed\r\n");
+        DEBUG_PRINT_ERROR("BME280 settings configuration failed\r\n");
         xSemaphoreGive(i2c_mutex);  
         vTaskDelete(NULL);
         return;
@@ -75,7 +76,7 @@ void StartBme280Task(void *argument)
 
     if (BME280_ValidateFirstMeasurement() != BME280_OK)
     {
-        printf("BME280 first measurement validation failed\r\n");
+        DEBUG_PRINT_ERROR("BME280 first measurement validation failed\r\n");
         xSemaphoreGive(i2c_mutex); 
         vTaskDelete(NULL);
         return;
@@ -83,11 +84,11 @@ void StartBme280Task(void *argument)
     
     if (xSemaphoreGive(i2c_mutex) != pdTRUE)
     {
-        printf("BME280: Failed to give I2C mutex\r\n");
+        DEBUG_PRINT_ERROR("BME280: Failed to give I2C mutex\r\n");
         vTaskDelete(NULL);
         return;
     }
-    printf("BME280 initialization complete, starting measurements\r\n");
+    DEBUG_PRINT_DEBUG("BME280 initialization complete, starting measurements\r\n");
 
     // Start main measurement loop
     int8_t rslt;
@@ -96,7 +97,7 @@ void StartBme280Task(void *argument)
     {
         if (xSemaphoreTake(i2c_mutex, portMAX_DELAY) != pdTRUE)
         {
-            printf("BME280: Failed to take I2C mutex\r\n");
+            DEBUG_PRINT_ERROR("BME280: Failed to take I2C mutex\r\n");
             continue;
         }
         
@@ -107,7 +108,7 @@ void StartBme280Task(void *argument)
         {
             if (DataLogger_UpdateBME280Data(&bme_comp_data) != pdTRUE)
             {
-                printf("BME280: Failed to update datalogger\r\n");
+                DEBUG_PRINT_ERROR("BME280: Failed to update datalogger\r\n");
             }
 
             // Print data for debugging
@@ -115,12 +116,12 @@ void StartBme280Task(void *argument)
         }
         else
         {
-            printf("BME280: Measurement failed, error: %d\r\n", rslt);
+            DEBUG_PRINT_ERROR("BME280: Measurement failed, error: %d\r\n", rslt);
         }
         
         if (xSemaphoreGive(i2c_mutex) != pdTRUE)
         {
-            printf("BME280: Failed to give I2C mutex\r\n");
+            DEBUG_PRINT_ERROR("BME280: Failed to give I2C mutex\r\n");
         }
         
         // Wait before next measurement (1 second interval)
@@ -137,11 +138,11 @@ int8_t BME280_InitializeInterface(void)
     int8_t rslt = bme280_interface_init(&bme_device, &hi2c1, BME280_I2C_ADDR_PRIM);
     if (rslt != BME280_OK)
     {
-        printf("Failed to initialize BME280 interface. Error: %d\r\n", rslt);
+        DEBUG_PRINT_ERROR("Failed to initialize BME280 interface. Error: %d\r\n", rslt);
         return rslt;
     }
 
-    printf("BME280 I2C interface initialized successfully\r\n");
+    DEBUG_PRINT_DEBUG("BME280 I2C interface initialized successfully\r\n");
     return BME280_OK;
 }
 
@@ -154,12 +155,12 @@ int8_t BME280_InitializeSensor(void)
     int8_t rslt = bme280_init(&bme_device);
     if (rslt != BME280_OK)
     {
-        printf("Failed to initialize BME280 sensor. Error: %d\r\n", rslt);
+        DEBUG_PRINT_ERROR("Failed to initialize BME280 sensor. Error: %d\r\n", rslt);
         bme280_interface_deinit(&bme_device);
         return rslt;
     }
 
-    printf("BME280 sensor initialized successfully. Chip ID: 0x%X\r\n", bme_device.chip_id);
+    DEBUG_PRINT_DEBUG("BME280 sensor initialized successfully. Chip ID: 0x%X\r\n", bme_device.chip_id);
     vTaskDelay(pdMS_TO_TICKS(CONFIG_BME280_CONFIG_DELAY_MS));
     return BME280_OK;
 }
@@ -177,7 +178,7 @@ int8_t BME280_ConfigureSettings(void)
     rslt = bme280_get_sensor_settings(&settings, &bme_device);
     if (rslt != BME280_OK)
     {
-        printf("Failed to get BME280 sensor settings. Error: %d\r\n", rslt);
+        DEBUG_PRINT_ERROR("Failed to get BME280 sensor settings. Error: %d\r\n", rslt);
         return rslt;
     }
 
@@ -190,7 +191,7 @@ int8_t BME280_ConfigureSettings(void)
     settings.filter = CONFIG_BME280_FILTER_COEFFICIENT; // No filtering (real-time data)
     settings.standby_time = BME280_STANDBY_TIME_1000_MS;
 
-    printf("Applying BME280 settings...\r\n");
+    DEBUG_PRINT_DEBUG("Applying BME280 settings...\r\n");
     return BME280_ApplySettings(&settings);
 }
 
@@ -202,7 +203,7 @@ int8_t BME280_ConfigureSettings(void)
 int8_t BME280_ApplySettings(struct bme280_settings *settings)
 {
     if (settings == NULL) {
-        printf("BME280: Invalid settings pointer\r\n");
+        DEBUG_PRINT_ERROR("BME280: Invalid settings pointer\r\n");
         return BME280_E_NULL_PTR;
     }
     
@@ -212,7 +213,7 @@ int8_t BME280_ApplySettings(struct bme280_settings *settings)
     rslt = bme280_set_sensor_settings(BME280_SEL_OSR_HUM, settings, &bme_device);
     if (rslt != BME280_OK)
     {
-        printf("Failed to set humidity settings. Error: %d\r\n", rslt);
+        DEBUG_PRINT_ERROR("Failed to set humidity settings. Error: %d\r\n", rslt);
         return rslt;
     }
     vTaskDelay(pdMS_TO_TICKS(CONFIG_BME280_SETTINGS_DELAY_MS));
@@ -221,7 +222,7 @@ int8_t BME280_ApplySettings(struct bme280_settings *settings)
     rslt = bme280_set_sensor_settings(BME280_SEL_OSR_TEMP | BME280_SEL_OSR_PRESS, settings, &bme_device);
     if (rslt != BME280_OK)
     {
-        printf("Failed to set temp/press settings. Error: %d\r\n", rslt);
+        DEBUG_PRINT_ERROR("Failed to set temp/press settings. Error: %d\r\n", rslt);
         return rslt;
     }
     vTaskDelay(pdMS_TO_TICKS(BME280_SETTINGS_DELAY_MS));
@@ -230,11 +231,11 @@ int8_t BME280_ApplySettings(struct bme280_settings *settings)
     rslt = bme280_set_sensor_settings(BME280_SEL_FILTER | BME280_SEL_STANDBY, settings, &bme_device);
     if (rslt != BME280_OK)
     {
-        printf("Failed to set filter/standby settings. Error: %d\r\n", rslt);
+        DEBUG_PRINT_ERROR("Failed to set filter/standby settings. Error: %d\r\n", rslt);
         return rslt;
     }
 
-    printf("BME280 settings applied successfully\r\n");
+    DEBUG_PRINT_DEBUG("BME280 settings applied successfully\r\n");
     return BME280_OK;
 }
 
@@ -250,11 +251,11 @@ int8_t BME280_ValidateFirstMeasurement(void)
     rslt = bme280_set_sensor_mode(BME280_POWERMODE_NORMAL, &bme_device);
     if (rslt != BME280_OK)
     {
-        printf("Failed to set BME280 sensor mode. Error: %d\r\n", rslt);
+        DEBUG_PRINT_ERROR("Failed to set BME280 sensor mode. Error: %d\r\n", rslt);
         return rslt;
     }
 
-    printf("Waiting for first measurement to complete...\r\n");
+    DEBUG_PRINT_DEBUG("Waiting for first measurement to complete...\r\n");
     vTaskDelay(pdMS_TO_TICKS(
         CONFIG_BME280_FIRST_MEASUREMENT_DELAY_MS)); // Wait for first measurement
 
@@ -262,11 +263,11 @@ int8_t BME280_ValidateFirstMeasurement(void)
     rslt = bme280_get_sensor_data(BME280_ALL, &bme_comp_data, &bme_device);
     if (rslt != BME280_OK)
     {
-        printf("Failed to get first measurement. Error: %d\r\n", rslt);
+        DEBUG_PRINT_ERROR("Failed to get first measurement. Error: %d\r\n", rslt);
         return rslt;
     }
 
-    printf("First measurement successful - BME280 ready for operation\r\n");
+    DEBUG_PRINT_DEBUG("First measurement successful - BME280 ready for operation\r\n");
     return BME280_OK;
 }
 
@@ -294,23 +295,17 @@ int8_t BME280_TakeForcedMeasurement(void)
     return rslt;
 }
 
+/**
+ * @brief Print BME280 measurement data to console
+ *
+ * This function formats and prints the temperature, pressure, and humidity
+ * data from the BME280 sensor in a human-readable format.
+ */
 void BME280_PrintMeasurementData(void)
 {
-    printf("BME280: %.2f°C, %.2f hPa, %.2f%%\r\n", 
+    DEBUG_PRINT_DEBUG("BME280: %.2f°C, %.2f hPa, %.2f%%\r\n", 
            bme_comp_data.temperature, bme_comp_data.pressure, bme_comp_data.humidity);
 }
 
-// /**
-//  * @brief Print BME280 measurement data for debugging
-//  */
-// void BME280_PrintMeasurementData_int(void)
-// {
-//     bme_calc_data_int_t bme_calc_data;
-//     convert_bme_data_to_int(&bme_comp_data, &bme_calc_data);
 
-//     printf("BME280: %d.%02d°C, %d.%02d hPa, %d.%02d%%\r\n",
-//            bme_calc_data.temp_whole, bme_calc_data.temp_frac,
-//            bme_calc_data.press_whole, bme_calc_data.press_frac,
-//            bme_calc_data.hum_whole, bme_calc_data.hum_frac);
-// }
 

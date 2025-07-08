@@ -11,6 +11,67 @@ extern "C" {
 #define PRINT_QUEUE_SIZE 64
 #define MAX_PRINT_MSG_LEN 128
 
+// Debug configuration
+#ifndef DEBUG_ENABLED
+#define DEBUG_ENABLED 1
+#endif
+
+// Debug levels (single definition)
+#define DEBUG_LEVEL_NONE 0
+#define DEBUG_LEVEL_ERROR 1
+#define DEBUG_LEVEL_WARN 2
+#define DEBUG_LEVEL_INFO 3
+#define DEBUG_LEVEL_DEBUG 4
+
+#ifndef DEBUG_LEVEL
+#define DEBUG_LEVEL DEBUG_LEVEL_INFO
+#endif
+
+// Debug macros
+#if DEBUG_ENABLED
+#define DEBUG_PRINT_ERROR(fmt, ...)                                            \
+  do {                                                                         \
+    if (DEBUG_LEVEL >= DEBUG_LEVEL_ERROR)                                      \
+      printf("[ERROR] " fmt, ##__VA_ARGS__);                                   \
+  } while (0)
+
+#define DEBUG_PRINT_WARN(fmt, ...)                                             \
+  do {                                                                         \
+    if (DEBUG_LEVEL >= DEBUG_LEVEL_WARN)                                       \
+      printf("[WARN] " fmt, ##__VA_ARGS__);                                    \
+  } while (0)
+
+#define DEBUG_PRINT_INFO(fmt, ...)                                             \
+  do {                                                                         \
+    if (DEBUG_LEVEL >= DEBUG_LEVEL_INFO)                                       \
+      printf("[INFO] " fmt, ##__VA_ARGS__);                                    \
+  } while (0)
+
+#define DEBUG_PRINT_DEBUG(fmt, ...)                                            \
+  do {                                                                         \
+    if (DEBUG_LEVEL >= DEBUG_LEVEL_DEBUG)                                      \
+      printf("[DEBUG] " fmt, ##__VA_ARGS__);                                   \
+  } while (0)
+
+#define DEBUG_PRINT(fmt, ...) DEBUG_PRINT_INFO(fmt, ##__VA_ARGS__)
+#else
+#define DEBUG_PRINT_ERROR(fmt, ...)                                            \
+  do {                                                                         \
+  } while (0)
+#define DEBUG_PRINT_WARN(fmt, ...)                                             \
+  do {                                                                         \
+  } while (0)
+#define DEBUG_PRINT_INFO(fmt, ...)                                             \
+  do {                                                                         \
+  } while (0)
+#define DEBUG_PRINT_DEBUG(fmt, ...)                                            \
+  do {                                                                         \
+  } while (0)
+#define DEBUG_PRINT(fmt, ...)                                                  \
+  do {                                                                         \
+  } while (0)
+#endif
+
 /**
  * @brief Represents a print message to be sent to the print queue.
  *

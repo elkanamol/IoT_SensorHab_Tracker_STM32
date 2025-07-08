@@ -48,6 +48,7 @@
 #include "sensor_conversions.h"
 
 #include "lwgps.h"
+#include "print.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -261,6 +262,10 @@ int main(void)
   }
   printf("I2C mutex given\n");
 
+  // Create the print task
+  BaseType_t printInitStatus = xPrintInit(CONFIG_TASK_PRIORITY_NORMAL);
+  configASSERT(printInitStatus == pdPASS);
+  printf("Print task created\n");
 
   // Create uAT parser task
   TaskStatus = xTaskCreate(uAT_Task,
@@ -413,43 +418,43 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 // printf implementation for UART3.
-int __io_putchar(int ch)
-{
-  HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, 0xFFFF);
-  return ch;
-}
+// int __io_putchar(int ch)
+// {
+//   HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, 0xFFFF);
+//   return ch;
+// }
 
-// printf implementation for UART3.
-int _write(int file, char *ptr, int len)
-{
-  (void)file;
-  HAL_UART_Transmit(&huart3, (uint8_t *)ptr, len, 0xFFFF);
-  return len;
-}
+// // printf implementation for UART3.
+// int _write(int file, char *ptr, int len)
+// {
+//   (void)file;
+//   HAL_UART_Transmit(&huart3, (uint8_t *)ptr, len, 0xFFFF);
+//   return len;
+// }
 
-// scanf implementation for UART3. (not used in this code)
-int _read(int file, char *ptr, int len)
-{
-  (void)file;
-  (void)len;
-  int ch = 0;
-  HAL_UART_Receive(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
-  HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
-  if (ch == 13)
-  {
-    ch = 10;
-    HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
-  }
-  else if (ch == 8)
-  {
-    ch = 0x30;
-    HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
-  }
+// // scanf implementation for UART3. (not used in this code)
+// int _read(int file, char *ptr, int len)
+// {
+//   (void)file;
+//   (void)len;
+//   int ch = 0;
+//   HAL_UART_Receive(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+//   HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+//   if (ch == 13)
+//   {
+//     ch = 10;
+//     HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+//   }
+//   else if (ch == 8)
+//   {
+//     ch = 0x30;
+//     HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+//   }
 
-  *ptr = ch;
+//   *ptr = ch;
 
-  return 1;
-}
+//   return 1;
+// }
 
 /**
  * @brief  MQTT_Task
@@ -466,40 +471,40 @@ static void MQTT_Task(void *argument)
   res = RC76XX_RegisterURCHandlers(&mqttHandle);
   if (res != RC76XX_OK)
   {
-    printf("Failed to register URC handlers: %d\r\n", res);
+    DEBUG_PRINT_ERROR("Failed to register URC handlers: %d\r\n", res);
     vTaskSuspend(NULL);
   }
-  printf("Registered all URC handlers\r\n");
+  DEBUG_PRINT_INFO("Registered all URC handlers\r\n");
 
   /* 0) Reset the modem */
-  printf("MQTT_Task: Resetting modem...\r\n");
+  DEBUG_PRINT_INFO("MQTT_Task: Resetting modem...\r\n");
   res = RC76XX_Reset(&mqttHandle);
   if (res != RC76XX_OK)
   {
-    printf("Reset failed: %d\r\n", res);
+    DEBUG_PRINT_ERROR("Reset failed: %d\r\n", res);
     vTaskSuspend(NULL);
   }
   vTaskDelay(delay);
 
   /* 1) Initialize modem */
-  printf("MQTT_Task: Initializing modem...\r\n");
+  DEBUG_PRINT_INFO("MQTT_Task: Initializing modem...\r\n");
   res = RC76XX_Initialize(&mqttHandle);
   if (res != RC76XX_OK)
   {
-    printf("Init failed: %d\r\n", res);
+    DEBUG_PRINT_ERROR("Init failed: %d\r\n", res);
     vTaskSuspend(NULL);
   }
-  printf("Initialized, IMEI=%s\r\n", mqttHandle.imei);
+  DEBUG_PRINT_INFO("Initialized, IMEI=%s\r\n", mqttHandle.imei);
 
   /* 2) Attach to network & get IP */
-  printf("Attaching to network...\r\n");
+  DEBUG_PRINT_INFO("Attaching to network...\r\n");
   res = RC76XX_NetworkAttach(&mqttHandle);
   if (res != RC76XX_OK)
   {
-    printf("NetworkAttach failed: %d\r\n", res);
+    DEBUG_PRINT_ERROR("NetworkAttach failed: %d\r\n", res);
     vTaskSuspend(NULL);
   }
-  printf("Network ready, IP=%s\r\n", mqttHandle.ip);
+  DEBUG_PRINT_INFO("Network ready, IP=%s\r\n", mqttHandle.ip);
 
   /* 3) Configure MQTT */
   const char *broker = CONFIG_MQTT_BROKER_HOSTNAME;
@@ -510,36 +515,36 @@ static void MQTT_Task(void *argument)
   const char *subTopic = CONFIG_MQTT_SUBSCRIBE_TOPIC;
   const char *pubTopic = CONFIG_MQTT_PUBLISH_TOPIC;
 
-  printf("Configuring MQTT %s:%u, ClientID=%s...\r\n", broker, port, clientID);
+  DEBUG_PRINT_INFO("Configuring MQTT %s:%u, ClientID=%s...\r\n", broker, port, clientID);
   res = RC76XX_ConfigMQTT(&mqttHandle, broker, port, clientID, pubTopic, user, pass, false, false, 120);
   if (res != RC76XX_OK)
   {
-    printf("ConfigMQTT failed: %d\r\n", res);
+    DEBUG_PRINT_ERROR("ConfigMQTT failed: %d\r\n", res);
     vTaskSuspend(NULL);
   }
-  printf("MQTT configured, cfg_id=%d\r\n", mqttHandle.mqtt_cfg_id);
+  DEBUG_PRINT_INFO("MQTT configured, cfg_id=%d\r\n", mqttHandle.mqtt_cfg_id);
 
   /* 4) Connect MQTT */
-  printf("Connecting MQTT...\r\n");
+  DEBUG_PRINT_INFO("Connecting MQTT...\r\n");
   res = RC76XX_ConnectMQTT(&mqttHandle);
   if (res != RC76XX_OK)
   {
-    printf("ConnectMQTT failed: %d\r\n", res);
+    DEBUG_PRINT_ERROR("ConnectMQTT failed: %d\r\n", res);
     vTaskSuspend(NULL);
   }
   vTaskDelay(delay);
-  printf("MQTT connected\r\n");
+  DEBUG_PRINT_INFO("MQTT connected\r\n");
 
   /* Subscribe to a topic */
-  printf("Subscribing to %s...\r\n", subTopic);
+  DEBUG_PRINT_INFO("Subscribing to %s...\r\n", subTopic);
   res = RC76XX_Subscribe(&mqttHandle, subTopic);
   if (res == RC76XX_OK)
   {
-    printf("Subscribed to %s\r\n", subTopic);
+    DEBUG_PRINT_INFO("Subscribed to %s\r\n", subTopic);
   }
   else
   {
-    printf("Subscribe failed: %d\r\n", res);
+    DEBUG_PRINT_ERROR("Subscribe failed: %d\r\n", res);
   }
 
   // Main MQTT transmission loop
@@ -550,7 +555,6 @@ static void MQTT_Task(void *argument)
         xQueueReceive(xMQTTQueue, &sensor_data, pdMS_TO_TICKS(portMAX_DELAY)) == pdTRUE)
     {
       // Convert to integer representation
-      // convert_combined_sensor_data_to_int_optimized(&sensor_data, &sensor_int_data);
 
       // Enhanced payload with GPS data
       char payload[400]; // Increased size for GPS data
@@ -563,21 +567,21 @@ static void MQTT_Task(void *argument)
                sensor_data.gps_latitude, sensor_data.gps_longitude);
 
       // printf("MQTT: Publishing combined sensor data with GPS\r\n");
-      printf("BME280: %s, MPU6050: %s, GPS: %s\r\n",
+      DEBUG_PRINT_INFO("BME280: %s, MPU6050: %s, GPS: %s\r\n",
              sensor_data.bme_valid ? "Valid" : "Invalid",
              sensor_data.mpu_valid ? "Valid" : "Invalid",
              sensor_data.gps_valid ? "Valid" : "Invalid");
-      // printf("MQTT Payload: %s\r\n", payload);
+      DEBUG_PRINT_DEBUG("MQTT Payload: %s\r\n", payload);
 
       // Publish to ThingSpeak
       res = RC76XX_Publish(&mqttHandle, pubTopic, payload);
       if (res == RC76XX_OK)
       {
-        printf("MQTT: Publish successful\r\n");
+        DEBUG_PRINT_INFO("MQTT: Publish successful\r\n");
       }
       else
       {
-        printf("MQTT: Publish failed: %d\r\n", res);
+        DEBUG_PRINT_ERROR("MQTT: Publish failed: %d\r\n", res);
       }
     }
     else
@@ -593,6 +597,7 @@ static void MQTT_Task(void *argument)
 
 void vGpsTaskStart(void *argument)
 {
+  DEBUG_PRINT_INFO("GPS Task Started\r\n");
   SensorData_Combined_t current_sensor_data;
   SensorData_Combined_Int_t gps_task_sensor_data;
   
@@ -604,7 +609,7 @@ void vGpsTaskStart(void *argument)
 
   if (lwgps_init(&hgps) != 1)
   {
-    printf("GPS initialization failed\r\n");
+    DEBUG_PRINT_ERROR("GPS initialization failed\r\n");
     vTaskDelete(NULL);
   }
 
@@ -623,9 +628,6 @@ void vGpsTaskStart(void *argument)
         float speed_kmh = hgps.speed * 1.852f;             // Convert knots to km/h
         float altitude_msl = hgps.altitude + hgps.geo_sep; // Mean sea level altitude
 
-        // printf("the GPS data: lat=%ld.%04ld&long=%ld.%04ld\r\n", 
-        //   gps_task_sensor_data.gps_lat_whole, gps_task_sensor_data.gps_lat_frac, // Latitude
-        //   gps_task_sensor_data.gps_lon_whole, gps_task_sensor_data.gps_lon_frac);  // Longitude
         BaseType_t result = DataLogger_UpdateGPSData(
             hgps.latitude,
                 hgps.longitude,
@@ -634,7 +636,7 @@ void vGpsTaskStart(void *argument)
 
         if (result != pdTRUE)
         {
-          printf("GPS: Failed to send data to datalogger\r\n");
+          DEBUG_PRINT_ERROR("GPS: Failed to send data to datalogger\r\n");
         }
       }
           // // Send GPS data to datalogger if valid
@@ -648,16 +650,14 @@ void vGpsTaskStart(void *argument)
       //   DataLogger_UpdateGPSData(0.0f, 0.0f, 0.0f, 0.0f);
       // }
       
-      printf("---\r\n");
-      printf("Valid status: %d\r\n", hgps.is_valid);
-      printf("Time: %02d:%02d:%02d\r\n", hgps.hours, hgps.minutes, hgps.seconds);
-      printf("Latitude Float: %f\r\n", hgps.latitude);
-      printf("Longitude Float: %f\r\n", hgps.longitude);
-      printf("Altitude Float: %f\r\n", hgps.altitude + hgps.geo_sep);
-      printf("Speed Float: %f\r\n", hgps.speed * 1.852f);
-      printf("Dop: %f, %f, %f\r\n", hgps.dop_h, hgps.dop_v, hgps.dop_v);
-      // printf("Latitude: %ld.%04ld degrees\r\n", gps_task_sensor_data.gps_lat_whole, gps_task_sensor_data.gps_lat_frac);
-      // printf("Longitude: %ld.%04ld degrees\r\n", gps_task_sensor_data.gps_lon_whole, gps_task_sensor_data.gps_lon_frac);
+      DEBUG_PRINT_DEBUG("---\r\n");
+      DEBUG_PRINT_DEBUG("Valid status: %d\r\n", hgps.is_valid);
+      DEBUG_PRINT_DEBUG("Time: %02d:%02d:%02d\r\n", hgps.hours, hgps.minutes, hgps.seconds);
+      DEBUG_PRINT_DEBUG("Latitude Float: %f\r\n", hgps.latitude);
+      DEBUG_PRINT_DEBUG("Longitude Float: %f\r\n", hgps.longitude);
+      DEBUG_PRINT_DEBUG("Altitude Float: %f\r\n", hgps.altitude + hgps.geo_sep);
+      DEBUG_PRINT_DEBUG("Speed Float: %f\r\n", hgps.speed * 1.852f);
+      DEBUG_PRINT_DEBUG("Dop: %f, %f, %f\r\n", hgps.dop_h, hgps.dop_v, hgps.dop_v);
       flag = 0;
     }
     vTaskDelay(pdMS_TO_TICKS(1000));

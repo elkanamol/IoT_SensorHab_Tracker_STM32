@@ -4,7 +4,6 @@
 #include "bme280.h"
 #include "bme280_porting.h"
 
-#include "bme280_tasks.h"
 #include "config.h"
 // External variables (declared here, defined in bme280_tasks.c)
 extern I2C_HandleTypeDef hi2c1;
