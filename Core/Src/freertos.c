@@ -117,7 +117,7 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-
+  (void)argument;
   /* Infinite loop */
   for(;;)
   {
@@ -141,7 +141,7 @@ void StartDefaultTask(void *argument)
  */
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 {
-  printf("Stack overflow in task: %s\n", pcTaskName);
+  printf("Stack overflow in task: %p %s\n",  (void *)xTask, pcTaskName);
   while (1)
   {
     HAL_GPIO_TogglePin(LD1_GPIO_Port, LD1_Pin);

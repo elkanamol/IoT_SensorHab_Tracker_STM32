@@ -55,6 +55,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/BME280/Src/bme280.c
     # Core/Src/w25qxx_hal.c
     Core/Src/datalogger.c
+    Core/Src/print.c
     Core/Src/bme280_tasks.c
     Core/Src/mpu6050_task.c
     Core/Src/sensor_conversions.c    

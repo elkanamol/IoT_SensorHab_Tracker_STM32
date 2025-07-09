@@ -7,6 +7,7 @@
 #include "semphr.h"
 #include <stdio.h>
 
+#include "print.h"
 #include "config.h"
 
 // External I2C mutex
@@ -19,6 +20,7 @@
  */
 static uint8_t mpu6050_read_data(SemaphoreHandle_t i2c_mutex, MPU6050_Data_t *data)
 {
+    DEBUG_PRINT_DEBUG("MPU6050: Reading sensor data...\r\n");
     float accel[3], gyro[3];
     uint8_t result = 1;  // Assume failure
     
@@ -43,7 +45,7 @@ static uint8_t mpu6050_read_data(SemaphoreHandle_t i2c_mutex, MPU6050_Data_t *da
         
         // Release I2C mutex
         if (xSemaphoreGive(i2c_mutex) != pdTRUE) {
-            printf("MPU6050: Failed to give I2C mutex\r\n");
+            DEBUG_PRINT_DEBUG("MPU6050: Failed to give I2C mutex\r\n");
         }
     }
     
@@ -56,6 +58,7 @@ static uint8_t mpu6050_read_data(SemaphoreHandle_t i2c_mutex, MPU6050_Data_t *da
  */
 static uint8_t mpu6050_init_sensor(void)
 {
+    DEBUG_PRINT_DEBUG("MPU6050: Initializing sensor...\r\n");
     uint8_t result = 1;  // Assume failure
 
     vTaskDelay(pdMS_TO_TICKS(CONFIG_MPU6050_STARTUP_DELAY_MS));
@@ -64,7 +67,7 @@ static uint8_t mpu6050_init_sensor(void)
     // If first attempt fails, try once more with longer delay
     if (result != 0)
     {
-        printf("MPU6050: First init attempt failed, retrying...\r\n");
+        DEBUG_PRINT_DEBUG("MPU6050: First init attempt failed, retrying...\r\n");
         vTaskDelay(pdMS_TO_TICKS(CONFIG_MPU6050_RETRY_DELAY_MS)); // Longer delay
         result = mpu6050_basic_init(CONFIG_MPU6050_I2C_ADDRESS);
     }
@@ -80,13 +83,13 @@ void MPU6050_Task_Start(void *argument)
     MPU6050_Task_Handle_t MPU6050_Task_Handle;
     TickType_t last_wake_time;
     
-    printf("MPU6050: Task started\r\n");    
+    DEBUG_PRINT_DEBUG("MPU6050: Task started\r\n");    
     // Cast the argument
     MPU6050_Task_Handle.mutex = (SemaphoreHandle_t)argument;
     configASSERT(MPU6050_Task_Handle.mutex != NULL);
     // Validate the handle before using it
     if (MPU6050_Task_Handle.mutex == NULL) {
-        printf("MPU6050: ERROR - Mutex handle is NULL!\r\n");
+        DEBUG_PRINT_ERROR("MPU6050: ERROR - Mutex handle is NULL!\r\n");
         vTaskDelete(NULL);
         return;
     }
@@ -94,22 +97,22 @@ void MPU6050_Task_Start(void *argument)
     
     vTaskDelay(pdMS_TO_TICKS(CONFIG_MPU6050_STARTUP_DELAY_MS)); // Wait longer to let BME280 finish init
     
-    printf("MPU6050: Attempting to take mutex with timeout...\r\n");
+    DEBUG_PRINT_DEBUG("MPU6050: Attempting to take mutex with timeout...\r\n");
     
     // Use timeout instead of portMAX_DELAY for debugging
     if (xSemaphoreTake(MPU6050_Task_Handle.mutex,
                        pdMS_TO_TICKS(CONFIG_MPU6050_MUTEX_TIMEOUT_MS)) !=
         pdTRUE) {
-      printf("MPU6050: Failed to take I2C mutex within timeout\r\n");
+      DEBUG_PRINT_ERROR("MPU6050: Failed to take I2C mutex within timeout\r\n");
       vTaskDelete(NULL);
       return;
     }
 
-    printf("MPU6050: Successfully acquired mutex!\r\n");
+    DEBUG_PRINT_DEBUG("MPU6050: Successfully acquired mutex!\r\n");
     
     // Initialize sensor
     if (mpu6050_init_sensor() != 0) {
-        printf("MPU6050: ERROR - Initialization failed\r\n");
+        DEBUG_PRINT_ERROR("MPU6050: ERROR - Initialization failed\r\n");
         xSemaphoreGive(MPU6050_Task_Handle.mutex);
         vTaskDelete(NULL);
         return;
@@ -117,12 +120,12 @@ void MPU6050_Task_Start(void *argument)
     
     if (xSemaphoreGive(MPU6050_Task_Handle.mutex) != pdTRUE)
     {
-        printf("MPU6050: Failed to give I2C mutex\r\n");
+        DEBUG_PRINT_ERROR("MPU6050: Failed to give I2C mutex\r\n");
         vTaskDelete(NULL);
         return;
     }
     
-    printf("MPU6050: Sensor initialized successfully\r\n");
+    DEBUG_PRINT_DEBUG("MPU6050: Sensor initialized successfully\r\n");
     
     // Initialize timing
     last_wake_time = xTaskGetTickCount();
@@ -146,10 +149,10 @@ void MPU6050_Task_Start(void *argument)
                     MPU6050_Task_Handle.data.gyro_z,
                     MPU6050_Task_Handle.data.temperature) != pdTRUE)
             {
-                printf("MPU6050: Failed to update datalogger\r\n");
+                DEBUG_PRINT_ERROR("MPU6050: Failed to update datalogger\r\n");
             }
         } else {
-            printf("MPU6050: ERROR - Failed to read sensor data\r\n");
+          DEBUG_PRINT_ERROR("MPU6050: ERROR - Failed to read sensor data\r\n");
         }
         
         // Wait for next cycle
@@ -164,7 +167,7 @@ void MPU6050_Task_Start(void *argument)
  */
 void MPU6050_Task_PrintData(const MPU6050_Data_t *data)
 {
-    printf("MPU6050 [%d ms]: Accel(%.2f, %.2f, %.2f)g Gyro(%.1f, %.1f, %.1f)dps Temp:%.1f°C\r\n",
+    DEBUG_PRINT_INFO("MPU6050 [%d ms]: Accel(%.2f, %.2f, %.2f)g Gyro(%.1f, %.1f, %.1f)dps Temp:%.1f°C\r\n",
            (int)data->timestamp,
            data->accel_x, data->accel_y, data->accel_z,
            data->gyro_x, data->gyro_y, data->gyro_z,

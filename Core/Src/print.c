@@ -41,7 +41,7 @@
   static void vStartPrintTask(void *pvParameters)
   {
       PrintMessage_t message;
-    
+      (void)pvParameters;
       for(;;) {
           if(xQueueReceive(xPrintQueue, &message, portMAX_DELAY) == pdTRUE) {
               HAL_UART_Transmit(&huart3, (uint8_t*)message.buffer, message.len, HAL_MAX_DELAY);

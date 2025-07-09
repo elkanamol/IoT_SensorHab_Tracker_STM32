@@ -49,13 +49,13 @@ static RC76XX_Result_t CheckModemErrors(const char *resp)
     
     if (uAT_IsCMEError(resp, &errorCode))
     {
-        RC76XX_ERROR("Modem reported CME ERROR: %d\n", errorCode);
+        RC76XX_ERROR("Modem reported CME ERROR: %u\n", errorCode);
         return RC76XX_ERR_CME;
     }
     
     if (uAT_IsCMSError(resp, &errorCode))
     {
-        RC76XX_ERROR("Modem reported CMS ERROR: %d\n", errorCode);
+        RC76XX_ERROR("Modem reported CMS ERROR: %u\n", errorCode);
         return RC76XX_ERR_CMS;
     }
     
@@ -84,7 +84,7 @@ RC76XX_Result_t RC76XX_Initialize(RC76XX_Handle_t *h)
 {
     if (!h || h->state != RC76XX_STATE_RESET)
     {
-        RC76XX_ERROR("Invalid state for initialization: %d\n", h ? h->state : -1);
+        RC76XX_ERROR("Invalid state for initialization: %u\n", h ? h->state : -1);
         return RC76XX_ERR_STATE;
     }
 
@@ -295,7 +295,6 @@ RC76XX_Result_t RC76XX_ConfigMQTT(RC76XX_Handle_t *h,
     memset(cmd, 0, sizeof(cmd));
     memset(resp, 0, sizeof(resp));
     int written = 0;
-    uAT_ParseResult_t parseResult;
     
     // Format the command string
     if (subscribe)
@@ -524,10 +523,10 @@ RC76XX_Result_t RC76XX_RegisterURCHandlers(RC76XX_Handle_t *h)
 void rc76xx_creg_handler(const char *args)
 {
     // args might be e.g. ": 1" or ": 0,1"
-    RC76XX_INFO("[%lu] >>> Network registration URC: %s", HAL_GetTick(), args);
+    RC76XX_INFO("[%u] >>> Network registration URC: %s", HAL_GetTick(), args);
     if (strcmp(args, ": 1,1") == 0)
     {
-        RC76XX_INFO("[%lu] >>> Network EPS registration successful", HAL_GetTick());
+        RC76XX_INFO("[%u] >>> Network EPS registration successful", HAL_GetTick());
     }
 }
 
@@ -535,17 +534,17 @@ void rc76xx_creg_handler(const char *args)
 void rc76xx_cgreg_handler(const char *args)
 {
     // args might be e.g. ": 1" or ": 0,1"
-    RC76XX_INFO("[%lu] >>> Network registration URC: %s", HAL_GetTick(), args);
+    RC76XX_INFO("[%u] >>> Network registration URC: %s", HAL_GetTick(), args);
     if (strcmp(args, ": 1") == 0)
     {
-        RC76XX_INFO("[%lu] >>> Network GPRS registration successful!!", HAL_GetTick());
+        RC76XX_INFO("[%u] >>> Network GPRS registration successful!!", HAL_GetTick());
     }
 }
 
 /* mqtt_data_handler: called whenever a line beginning with "+KMQTT_DATA:" is received */
 void rc76xx_mqtt_data_handler(const char *args)
 {
-    RC76XX_INFO("[%lu] >>> MQTT data URC: %s", HAL_GetTick(), args);
+    RC76XX_INFO("[%u] >>> MQTT data URC: %s", HAL_GetTick(), args);
     
     // // Extract topic and payload from the data
     // char topic[RC76XX_TOPIC_LEN] = {0};
@@ -555,7 +554,7 @@ void rc76xx_mqtt_data_handler(const char *args)
     // // First, skip the socket ID
     // const char *topicStart = strchr(args, ',');
     // if (!topicStart) {
-    //     printf("[%lu] >>> Error: Invalid MQTT data format (no comma found)\n", HAL_GetTick());
+    //     printf("[%u] >>> Error: Invalid MQTT data format (no comma found)\n", HAL_GetTick());
     //     return;
     // }
     
@@ -563,20 +562,20 @@ void rc76xx_mqtt_data_handler(const char *args)
     
     // // Extract the topic (quoted string)
     // if (*topicStart != '\"') {
-    //     printf("[%lu] >>> Error: Invalid MQTT data format (topic not quoted)\n", HAL_GetTick());
+    //     printf("[%u] >>> Error: Invalid MQTT data format (topic not quoted)\n", HAL_GetTick());
     //     return;
     // }
     
     // topicStart++; // Skip opening quote
     // const char *topicEnd = strchr(topicStart, '\"');
     // if (!topicEnd) {
-    //     printf("[%lu] >>> Error: Invalid MQTT data format (topic not properly quoted)\n", HAL_GetTick());
+    //     printf("[%u] >>> Error: Invalid MQTT data format (topic not properly quoted)\n", HAL_GetTick());
     //     return;
     // }
     
     // size_t topicLen = topicEnd - topicStart;
     // if (topicLen >= RC76XX_TOPIC_LEN) {
-    //     printf("[%lu] >>> Error: Topic too long (%zu bytes)\n", HAL_GetTick(), topicLen);
+    //     printf("[%u] >>> Error: Topic too long (%zu bytes)\n", HAL_GetTick(), topicLen);
     //     topicLen = RC76XX_TOPIC_LEN - 1; // Truncate
     // }
     
@@ -589,7 +588,7 @@ void rc76xx_mqtt_data_handler(const char *args)
     // // Find the next comma
     // payloadStart = strchr(payloadStart, ',');
     // if (!payloadStart) {
-    //     printf("[%lu] >>> Error: Invalid MQTT data format (no payload delimiter)\n", HAL_GetTick());
+    //     printf("[%u] >>> Error: Invalid MQTT data format (no payload delimiter)\n", HAL_GetTick());
     //     return;
     // }
     
@@ -597,7 +596,7 @@ void rc76xx_mqtt_data_handler(const char *args)
     
     // // Check if payload is quoted
     // if (*payloadStart != '\"') {
-    //     printf("[%lu] >>> Error: Invalid MQTT data format (payload not quoted)\n", HAL_GetTick());
+    //     printf("[%u] >>> Error: Invalid MQTT data format (payload not quoted)\n", HAL_GetTick());
     //     return;
     // }
     
@@ -615,14 +614,14 @@ void rc76xx_mqtt_data_handler(const char *args)
     // }
     
     // if (!payloadEnd) {
-    //     printf("[%lu] >>> Error: Invalid MQTT data format (payload not properly quoted)\n", HAL_GetTick());
+    //     printf("[%u] >>> Error: Invalid MQTT data format (payload not properly quoted)\n", HAL_GetTick());
     //     return;
     // }
     
     // size_t payloadLen = payloadEnd - payloadStart;
     // if (payloadLen >= RC76XX_RX_PAYLOAD_LEN)
     // {
-    //     printf("[%lu] >>> Error: Payload too long (%zu bytes)\n", HAL_GetTick(), payloadLen);
+    //     printf("[%u] >>> Error: Payload too long (%zu bytes)\n", HAL_GetTick(), payloadLen);
     //     payloadLen = RC76XX_RX_PAYLOAD_LEN - 1; // Truncate
     // }
 
@@ -630,15 +629,15 @@ void rc76xx_mqtt_data_handler(const char *args)
     // payload[payloadLen] = '\0';
     
     // // Print the extracted data
-    // printf("[%lu] >>> MQTT data:\n", HAL_GetTick());
-    // printf("[%lu] >>> Topic: %s\n", HAL_GetTick(), topic);
-    // printf("[%lu] >>> Payload: %s\n", HAL_GetTick(), payload);
+    // printf("[%u] >>> MQTT data:\n", HAL_GetTick());
+    // printf("[%u] >>> Topic: %s\n", HAL_GetTick(), topic);
+    // printf("[%u] >>> Payload: %s\n", HAL_GetTick(), payload);
     
     // // If the payload is JSON, you might want to parse it further
-    // // For example, if it contains a field1 value as shown in your example
+    // // For example, if it contains a field1 vaue as shown in your example
     // if (strstr(payload, "field1")) {
     //     // You could extract specific fields here if needed
-    //     printf("[%lu] >>> JSON payload detected\n", HAL_GetTick());
+    //     printf("[%u] >>> JSON payload detected\n", HAL_GetTick());
     // }
 }
 
@@ -690,25 +689,26 @@ void rc76xx_mqtt_ind_handler(const char *args)
 // Reset handler to handle the reset URC from the module
 void rc76xx_reset_handler(const char *args)
 {
+    (void)args;
     if (!g_mqtt_handle)
     {
-        RC76XX_ERROR("[%lu] >>> RC76xx modem has reset but no handle available!\r\n", HAL_GetTick());
+        RC76XX_ERROR("[%u] >>> RC76xx modem has reset but no handle available!\r\n", HAL_GetTick());
         return;
     }
 
     g_mqtt_handle->state = RC76XX_STATE_RESET;
-    RC76XX_INFO("[%lu] >>> RC76xx modem has reset!!, state transition to RC76XX_STATE_RESET:\r\n", HAL_GetTick());
+    RC76XX_INFO("[%u] >>> RC76xx modem has reset!!, state transition to RC76XX_STATE_RESET:\r\n", HAL_GetTick());
 }
 
 // This will be called whenever a line "OK\r\n" arrives.
 void rc76xx_ok_handler(const char *args)
 {
     // args points just past the "OK" in your buffer.
-    RC76XX_INFO("[%lu] >>> Got OK response%s", HAL_GetTick(), args);
+    RC76XX_INFO("[%u] >>> Got OK response%s", HAL_GetTick(), args);
 }
 
 // This will be called whenever a line "ERROR\r\n" arrives.
 void rc76xx_error_handler(const char *args)
 {
-    RC76XX_ERROR("[%lu] >>> Got ERROR response%s", HAL_GetTick(), args);
+    RC76XX_ERROR("[%u] >>> Got ERROR response%s", HAL_GetTick(), args);
 }
