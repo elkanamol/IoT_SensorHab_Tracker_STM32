@@ -28,6 +28,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "config.h"
+#include "print.h"
 #include "mqtt_secrets.h"
 #include "rc76xx_mqtt.h"
 #include "stdio.h"
@@ -48,7 +49,6 @@
 #include "sensor_conversions.h"
 
 #include "lwgps.h"
-#include "print.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -226,19 +226,23 @@ int main(void)
   MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  // Initialize uAT parser on huart2
-  uAT_Result_t result = uAT_Init(&huart2);
-  if (result != UAT_OK)
-  {
-    // handle init error (blink LED, etc.)
-    printf("uAT parser initialization failed with error code: %d\n", result);
-    Error_Handler();
-  }
-  printf("uAT parser initialized\n");
-
   /* Init scheduler */
   osKernelInitialize();
   // MX_FREERTOS_Init();
+  // Create the print task
+  BaseType_t printInitStatus = xPrintInit(CONFIG_TASK_PRIORITY_NORMAL);
+  configASSERT(printInitStatus == pdPASS);
+  DEBUG_PRINT_DEBUG("Print task created\n");
+
+  // Initialize uAT parser on huart2
+  uAT_Result_t result = uAT_Init(&huart2);
+  if (result != UAT_OK) {
+    // handle init error (blink LED, etc.)
+    DEBUG_PRINT_ERROR("uAT parser initialization failed with error code: %d\n",
+                      result);
+    Error_Handler();
+  }
+  DEBUG_PRINT_DEBUG("uAT parser initialized\n");
 
   BaseType_t TaskStatus;
   // Create the uAT parser task
@@ -248,24 +252,19 @@ int main(void)
   // In main() or initialization function:
   g_i2c_mutex = xSemaphoreCreateMutex();
   configASSERT(g_i2c_mutex != NULL);
-  printf("I2C mutex created\n");
+  DEBUG_PRINT_DEBUG("I2C mutex created\n");
   if (xSemaphoreTake(g_i2c_mutex, portMAX_DELAY) != pdTRUE)
   {
-    printf("Failed to take I2C mutex\n");
+    DEBUG_PRINT_ERROR("Failed to take I2C mutex\n");
     Error_Handler();
   }
-  printf("I2C mutex taken\n");
+  DEBUG_PRINT_DEBUG("I2C mutex taken\n");
   if (xSemaphoreGive(g_i2c_mutex) != pdTRUE)
   {
-    printf("Failed to give I2C mutex\n");
+    DEBUG_PRINT_ERROR("Failed to give I2C mutex\n");
     Error_Handler();
   }
-  printf("I2C mutex given\n");
-
-  // Create the print task
-  BaseType_t printInitStatus = xPrintInit(CONFIG_TASK_PRIORITY_NORMAL);
-  configASSERT(printInitStatus == pdPASS);
-  printf("Print task created\n");
+  DEBUG_PRINT_DEBUG("I2C mutex given\n");
 
   // Create uAT parser task
   TaskStatus = xTaskCreate(uAT_Task,
@@ -275,7 +274,7 @@ int main(void)
                            CONFIG_TASK_PRIORITY_NORMAL,
                            NULL);
   configASSERT(TaskStatus == pdPASS);
-  printf("uAT task created\n");
+  DEBUG_PRINT_DEBUG("uAT task created\n");
 
   // // (Optional) your other application tasks
   // xTaskCreate(App_Task,
@@ -292,7 +291,7 @@ int main(void)
                            CONFIG_TASK_PRIORITY_NORMAL,
                            NULL);
   configASSERT(TaskStatus == pdPASS);
-  printf("MQTT task created\n");
+  DEBUG_PRINT_DEBUG("MQTT task created\n");
 
   // Create the BME280 task
   TaskStatus = xTaskCreate(StartBme280Task,
@@ -302,7 +301,7 @@ int main(void)
                            CONFIG_TASK_PRIORITY_NORMAL,
                            NULL);
   configASSERT(TaskStatus == pdPASS);
-  printf("BME280 task created\n");
+  DEBUG_PRINT_DEBUG("BME280 task created\n");
   // Create MPU6050 task
   TaskStatus = xTaskCreate(MPU6050_Task_Start,
                            "MPU6050",
@@ -311,8 +310,7 @@ int main(void)
                            CONFIG_TASK_PRIORITY_NORMAL,
                            NULL);
   configASSERT(TaskStatus == pdPASS);
-  printf("MPU6050 task created\n");
-
+  DEBUG_PRINT_DEBUG("MPU6050 task created\n");
 
   // Create the Data Logger task
   TaskStatus = xTaskCreate(
@@ -323,7 +321,7 @@ int main(void)
                           CONFIG_TASK_PRIORITY_NORMAL, 
                           NULL);
   configASSERT(TaskStatus == pdPASS);
-  printf("DataLogger task created\n");
+  DEBUG_PRINT_DEBUG("DataLogger task created\n");
 
   // Create the GPS task
   TaskStatus = xTaskCreate(vGpsTaskStart,
@@ -333,7 +331,7 @@ int main(void)
                            CONFIG_TASK_PRIORITY_NORMAL,
                            NULL);
   configASSERT(TaskStatus == pdPASS);
-  printf("GPS task created\n");
+  DEBUG_PRINT_DEBUG("GPS task created\n");
 
   /* USER CODE END 2 */
 
@@ -463,6 +461,7 @@ void SystemClock_Config(void)
  */
 static void MQTT_Task(void *argument)
 {
+  (void)argument;
   RC76XX_Result_t res;
   TickType_t delay = pdMS_TO_TICKS(20000);
   SensorData_Combined_t sensor_data;
@@ -481,7 +480,7 @@ static void MQTT_Task(void *argument)
   res = RC76XX_Reset(&mqttHandle);
   if (res != RC76XX_OK)
   {
-    DEBUG_PRINT_ERROR("Reset failed: %d\r\n", res);
+    DEBUG_PRINT_ERROR("Reset modem failed: %d\r\n", res);
     vTaskSuspend(NULL);
   }
   vTaskDelay(delay);
@@ -597,6 +596,7 @@ static void MQTT_Task(void *argument)
 
 void vGpsTaskStart(void *argument)
 {
+  (void)argument;
   DEBUG_PRINT_INFO("GPS Task Started\r\n");
   SensorData_Combined_t current_sensor_data;
   SensorData_Combined_Int_t gps_task_sensor_data;
@@ -650,7 +650,7 @@ void vGpsTaskStart(void *argument)
       //   DataLogger_UpdateGPSData(0.0f, 0.0f, 0.0f, 0.0f);
       // }
       
-      DEBUG_PRINT_DEBUG("---\r\n");
+      // DEBUG_PRINT_DEBUG("---\r\n");
       DEBUG_PRINT_DEBUG("Valid status: %d\r\n", hgps.is_valid);
       DEBUG_PRINT_DEBUG("Time: %02d:%02d:%02d\r\n", hgps.hours, hgps.minutes, hgps.seconds);
       DEBUG_PRINT_DEBUG("Latitude Float: %f\r\n", hgps.latitude);

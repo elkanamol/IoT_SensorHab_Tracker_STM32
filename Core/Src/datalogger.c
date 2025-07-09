@@ -170,7 +170,7 @@ static void DataLogger_SaveCurrentDataToFlash(void)
     records_in_buffer++;
 
     DEBUG_PRINT_DEBUG(
-        "DataLogger: Saved record #%lu - BME280(%s) MPU6050(%s)\r\n",
+        "DataLogger: Saved record #%u - BME280(%s) MPU6050(%s)\r\n",
         record_to_save.record_id,
         record_to_save.bme_valid ? "Valid" : "Invalid",
         record_to_save.mpu_valid ? "Valid" : "Invalid");
