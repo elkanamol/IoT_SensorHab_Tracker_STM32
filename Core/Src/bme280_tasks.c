@@ -1,13 +1,14 @@
 #include "bme280_tasks.h"
-#include "bme280_defs.h"
-#include "bme280_porting.h" 
 #include "bme280.h"
-#include "sensor_conversions.h" 
-#include "main.h"
-#include "stdio.h"
-#include "datalogger.h"
+#include "bme280_defs.h"
+#include "bme280_porting.h"
 #include "config.h"
+#include "datalogger.h"
+#include "main.h"
+#include "peripheral_init_helper.h"
 #include "print.h"
+#include "sensor_conversions.h"
+#include "stdio.h"
 
 // Define global variables here (not in header!)
 struct bme280_dev bme_device;
@@ -27,106 +28,125 @@ struct bme280_data bme_comp_data;
  *
  * @param argument FreeRTOS task argument (unused)
  */
-void StartBme280Task(void *argument)
-{
+static void BME280_CleanupMutex(SemaphoreHandle_t i2c_mutex, const char* error_msg) {
+  if (error_msg) {
+    DEBUG_PRINT_ERROR("%s\r\n", error_msg);
+  }
+  xSemaphoreGive(i2c_mutex);
+  DEBUG_PRINT_DEBUG("BME280: I2C mutex released after failed init\r\n");
+}
+
+static int8_t BME280_FullInit(void *context) {
+  if (context == NULL) {
+    DEBUG_PRINT_ERROR("BME280: I2C mutex is NULL\r\n");
+    return -1;
+  }
+  
+  SemaphoreHandle_t i2c_mutex = (SemaphoreHandle_t)context;
+  DEBUG_PRINT_DEBUG("BME280: Trying to take I2C mutex for full init\r\n");
+  
+  if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+    DEBUG_PRINT_DEBUG("BME280: Failed to take I2C mutex for full init\r\n");
+    return -1;
+  }
+  
+  DEBUG_PRINT_DEBUG("BME280: I2C mutex acquired for full init\r\n");
+
+  // Step 1: Initialize I2C interface
+  if (BME280_InitializeInterface() != BME280_OK) {
+    BME280_CleanupMutex(i2c_mutex, "BME280: I2C interface init failed");
+    return -1;
+  }
+  
+  // Step 2: Initialize sensor
+  if (BME280_InitializeSensor() != BME280_OK) {
+    BME280_CleanupMutex(i2c_mutex, "BME280: Sensor init failed");
+    return -1;
+  }
+  
+  // Step 3: Configure settings
+  if (BME280_ConfigureSettings() != BME280_OK) {
+    BME280_CleanupMutex(i2c_mutex, "BME280: Sensor config failed");
+    return -1;
+  }
+  
+  // Step 4: Validate first measurement
+  if (BME280_ValidateFirstMeasurement() != BME280_OK) {
+    BME280_CleanupMutex(i2c_mutex, "BME280: First measurement validation failed");
+    return -1;
+  }
+
+  xSemaphoreGive(i2c_mutex);
+  DEBUG_PRINT_DEBUG("BME280: I2C mutex released after full init\r\n");
+  return 0;
+}
+
+void StartBme280Task(void *argument) {
+  DEBUG_PRINT_DEBUG("BME280: Starting task...\r\n");
+  if (argument == NULL) {
+    DEBUG_PRINT_ERROR("BME280: I2C mutex is NULL\r\n");
+    vTaskDelete(NULL);
+    return;
+  }
     SemaphoreHandle_t i2c_mutex = (SemaphoreHandle_t)argument;
-    
+
     // Validate argument before any delays
     if (i2c_mutex == NULL) {
-        DEBUG_PRINT_ERROR("BME280: I2C mutex is NULL\r\n");
-        vTaskDelete(NULL);
-        return;
-    }
-    
-    // Use named constant for startup delay
-    vTaskDelay(pdMS_TO_TICKS(CONFIG_BME280_STARTUP_DELAY_MS));
-    DEBUG_PRINT_DEBUG("Starting BME280 task...\r\n");
-    
-    if (xSemaphoreTake(i2c_mutex, portMAX_DELAY) != pdTRUE)
-    {
-        DEBUG_PRINT_ERROR("BME280: Failed to take I2C mutex\r\n");
-        vTaskDelete(NULL);
-        return;
-    }
+      DEBUG_PRINT_ERROR("BME280: I2C mutex is NULL\r\n");
+      vTaskDelete(NULL);
+      return;
+  }
+  DEBUG_PRINT_DEBUG("BME280: I2C mutex is valid\r\n");
+  //   // first take the mutex before any delays
+  //   if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+  //     DEBUG_PRINT_ERROR("BME280: Failed to take I2C mutex, delete
+  //     task!!\r\n"); vTaskDelete(NULL); return;
+  //   }
+  // Use named constant for startup delay
+  vTaskDelay(pdMS_TO_TICKS(CONFIG_BME280_STARTUP_DELAY_MS));
+  DEBUG_PRINT_DEBUG("Starting BME280 task...\r\n");
 
-    // Initialize BME280 step by step
-    if (BME280_InitializeInterface() != BME280_OK)
-    {
-        DEBUG_PRINT_ERROR("BME280 interface initialization failed\r\n");
-        xSemaphoreGive(i2c_mutex);  
-        vTaskDelete(NULL);
-        return;
-    }
+  InitRetryConfig_t bme280_init_cfg = {.init_func = BME280_FullInit,
+                                       .context =
+                                           i2c_mutex, // Use i2c_mutex here
+                                       .mutex = i2c_mutex,
+                                       .max_retries = 5,
+                                       .retry_delay_ms = 500,
+                                       .backoff_factor = 2,
+                                       .mutex_timeout_ms = 1000};
+  InitResult_t res = Peripheral_InitWithRetry(&bme280_init_cfg);
+  if (res != INIT_SUCCESS) {
+    DEBUG_PRINT_ERROR("BME280: Initialization failed after retries\r\n");
+    vTaskDelete(NULL);
+    return;
+  }
+  DEBUG_PRINT_DEBUG(
+      "BME280 initialization complete, starting measurements\r\n");
 
-    if (BME280_InitializeSensor() != BME280_OK)
-    {
-        DEBUG_PRINT_ERROR("BME280 sensor initialization failed\r\n");
-        xSemaphoreGive(i2c_mutex);  
-        vTaskDelete(NULL);
-        return;
-    }
+  // Start main measurement loop
+  int8_t rslt;
 
-    if (BME280_ConfigureSettings() != BME280_OK)
-    {
-        DEBUG_PRINT_ERROR("BME280 settings configuration failed\r\n");
-        xSemaphoreGive(i2c_mutex);  
-        vTaskDelete(NULL);
-        return;
-    }
-
-    if (BME280_ValidateFirstMeasurement() != BME280_OK)
-    {
-        DEBUG_PRINT_ERROR("BME280 first measurement validation failed\r\n");
-        xSemaphoreGive(i2c_mutex); 
-        vTaskDelete(NULL);
-        return;
-    }
-    
-    if (xSemaphoreGive(i2c_mutex) != pdTRUE)
-    {
-        DEBUG_PRINT_ERROR("BME280: Failed to give I2C mutex\r\n");
-        vTaskDelete(NULL);
-        return;
-    }
-    DEBUG_PRINT_DEBUG("BME280 initialization complete, starting measurements\r\n");
-
-    // Start main measurement loop
-    int8_t rslt;
-
-    for (;;)
-    {
-        if (xSemaphoreTake(i2c_mutex, portMAX_DELAY) != pdTRUE)
-        {
-            DEBUG_PRINT_ERROR("BME280: Failed to take I2C mutex\r\n");
-            continue;
+  for (;;) {
+    if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+      rslt = BME280_TakeForcedMeasurement();
+      xSemaphoreGive(i2c_mutex);
+      if (rslt == BME280_OK) {
+        if (DataLogger_UpdateBME280Data(&bme_comp_data) != pdTRUE) {
+          DEBUG_PRINT_ERROR("BME280: Failed to update datalogger\r\n");
         }
-        
-        // Take forced measurement (power efficient)
-        rslt = BME280_TakeForcedMeasurement();
 
-        if (rslt == BME280_OK)
-        {
-            if (DataLogger_UpdateBME280Data(&bme_comp_data) != pdTRUE)
-            {
-                DEBUG_PRINT_ERROR("BME280: Failed to update datalogger\r\n");
-            }
-
-            // Print data for debugging
-            BME280_PrintMeasurementData();
-        }
-        else
-        {
-            DEBUG_PRINT_ERROR("BME280: Measurement failed, error: %d\r\n", rslt);
-        }
-        
-        if (xSemaphoreGive(i2c_mutex) != pdTRUE)
-        {
-            DEBUG_PRINT_ERROR("BME280: Failed to give I2C mutex\r\n");
-        }
-        
-        // Wait before next measurement (1 second interval)
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_BME280_MEASUREMENT_INTERVAL_MS));
+        // Print data for debugging
+        BME280_PrintMeasurementData();
+      } else {
+        DEBUG_PRINT_ERROR("BME280: Measurement failed, error: %d\r\n", rslt);
+      }
+    } else {
+      DEBUG_PRINT_ERROR("BME280: Failed to take I2C mutex for measurement\r\n");
     }
+
+    // Wait before next measurement (1 second interval)
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_BME280_MEASUREMENT_INTERVAL_MS));
+  }
 }
 
 /**

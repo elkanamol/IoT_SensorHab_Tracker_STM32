@@ -7,8 +7,10 @@
 #include "semphr.h"
 #include <stdio.h>
 
-#include "print.h"
 #include "config.h"
+#include "peripheral_init_helper.h"
+#include "print.h"
+
 
 // External I2C mutex
 // extern SemaphoreHandle_t g_i2c_mutex = NULL;
@@ -74,6 +76,32 @@ static uint8_t mpu6050_init_sensor(void)
     return result;
 }
 
+static int8_t MPU6050_FullInit(void *context)
+{
+    if (context == NULL) {
+        DEBUG_PRINT_ERROR("MPU6050: I2C mutex is NULL\r\n");
+        return -1;
+    }
+    SemaphoreHandle_t i2c_mutex = (SemaphoreHandle_t)context;
+    int8_t result = -1;
+    DEBUG_PRINT_DEBUG("MPU6050: Trying to take I2C mutex for full init\r\n");
+    if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(MPU6050_MUTEX_TIMEOUT_MS)) != pdTRUE) {
+        DEBUG_PRINT_DEBUG("MPU6050: Failed to take I2C mutex for full init\r\n");
+        return -1;
+    }
+    DEBUG_PRINT_DEBUG("MPU6050: I2C mutex acquired for full init\r\n");
+    vTaskDelay(pdMS_TO_TICKS(MPU6050_STARTUP_DELAY_MS));
+    result = mpu6050_basic_init(CONFIG_MPU6050_I2C_ADDRESS);
+    if (result != 0) {
+        DEBUG_PRINT_DEBUG("MPU6050: First init attempt failed, retrying...\r\n");
+        vTaskDelay(pdMS_TO_TICKS(MPU6050_RETRY_DELAY_MS));
+        result = mpu6050_basic_init(CONFIG_MPU6050_I2C_ADDRESS);
+    }
+    xSemaphoreGive(i2c_mutex);
+    DEBUG_PRINT_DEBUG("MPU6050: I2C mutex released after full init\r\n");
+    return (result == 0) ? 0 : -1;
+}
+
 /**
  * @brief Main MPU6050 task function
  * @param argument Task argument (I2C mutex)
@@ -93,38 +121,22 @@ void MPU6050_Task_Start(void *argument)
         vTaskDelete(NULL);
         return;
     }
-    
-    
-    vTaskDelay(pdMS_TO_TICKS(CONFIG_MPU6050_STARTUP_DELAY_MS)); // Wait longer to let BME280 finish init
-    
-    DEBUG_PRINT_DEBUG("MPU6050: Attempting to take mutex with timeout...\r\n");
-    
-    // Use timeout instead of portMAX_DELAY for debugging
-    if (xSemaphoreTake(MPU6050_Task_Handle.mutex,
-                       pdMS_TO_TICKS(CONFIG_MPU6050_MUTEX_TIMEOUT_MS)) !=
-        pdTRUE) {
-      DEBUG_PRINT_ERROR("MPU6050: Failed to take I2C mutex within timeout\r\n");
+    vTaskDelay(CONFIG_MPU6050_STARTUP_DELAY_MS);
+
+    InitRetryConfig_t mpu6050_init_cfg = {.init_func = MPU6050_FullInit,
+                                          .context = MPU6050_Task_Handle.mutex,
+                                          .mutex = MPU6050_Task_Handle.mutex,
+                                          .max_retries = 5,
+                                          .retry_delay_ms = 500,
+                                          .backoff_factor = 2,
+                                          .mutex_timeout_ms =
+                                              MPU6050_MUTEX_TIMEOUT_MS};
+    InitResult_t res = Peripheral_InitWithRetry(&mpu6050_init_cfg);
+    if (res != INIT_SUCCESS) {
+      DEBUG_PRINT_ERROR("MPU6050: Initialization failed after retries\r\n");
       vTaskDelete(NULL);
       return;
     }
-
-    DEBUG_PRINT_DEBUG("MPU6050: Successfully acquired mutex!\r\n");
-    
-    // Initialize sensor
-    if (mpu6050_init_sensor() != 0) {
-        DEBUG_PRINT_ERROR("MPU6050: ERROR - Initialization failed\r\n");
-        xSemaphoreGive(MPU6050_Task_Handle.mutex);
-        vTaskDelete(NULL);
-        return;
-    }
-    
-    if (xSemaphoreGive(MPU6050_Task_Handle.mutex) != pdTRUE)
-    {
-        DEBUG_PRINT_ERROR("MPU6050: Failed to give I2C mutex\r\n");
-        vTaskDelete(NULL);
-        return;
-    }
-    
     DEBUG_PRINT_DEBUG("MPU6050: Sensor initialized successfully\r\n");
     
     // Initialize timing

@@ -40,18 +40,16 @@
 
 // Defines initial delays for tasks to allow system stabilization.
 #define CONFIG_BME280_CONFIG_DELAY_MS              10
-#define CONFIG_BME280_STARTUP_DELAY_MS             2000
-#define CONFIG_MPU6050_STARTUP_DELAY_MS            2000 // Should be > BME280 startup
+#define CONFIG_BME280_STARTUP_DELAY_MS 1000
+#define CONFIG_MPU6050_STARTUP_DELAY_MS 5000 // Should be > BME280 startup
 #define CONFIG_DATALOGGER_QUEUE_SEND_TIMEOUT_MS   1000
 #define CONFIG_BME280_SETTINGS_DELAY_MS           10
 #define CONFIG_BME280_FIRST_MEASUREMENT_DELAY_MS  1000
 #define CONFIG_BME280_FORCED_MODE_DELAY_MS        50
-#define CONFIG_MPU6050_RETRY_DELAY_MS             100
-#define CONFIG_BME280_STARTUP_DELAY_MS             2000
-#define CONFIG_MPU6050_STARTUP_DELAY_MS            2000 // Should be > BME280 startup
+#define CONFIG_MPU6050_RETRY_DELAY_MS 100
 
 // Timeout for MPU6050 task to wait for the shared I2C bus mutex.
-#define CONFIG_MPU6050_MUTEX_TIMEOUT_MS            5000
+#define CONFIG_MPU6050_MUTEX_TIMEOUT_MS 10000
 
 // BME280 Sensor Hardware Settings
 // These settings trade accuracy for power consumption and measurement time.
@@ -79,14 +77,13 @@
 // Adjust these based on task complexity and memory usage.
 #define CONFIG_TASK_STACK_SIZE_UAT             (512)
 #define CONFIG_TASK_STACK_SIZE_MQTT            (512 * 2)
-#define CONFIG_TASK_STACK_SIZE_BME280          (512)
-#define CONFIG_TASK_STACK_SIZE_MPU6050         (512)
+#define CONFIG_TASK_STACK_SIZE_BME280 (1024)
+#define CONFIG_TASK_STACK_SIZE_MPU6050 (1024)
 #define CONFIG_TASK_STACK_SIZE_DATALOGGER      (2048)
 #define CONFIG_TASK_STACK_SIZE_GPS             (1536)
 
 // Add missing BME280 delays (tune as needed)
-#define CONFIG_BME280_SETTINGS_DELAY_MS           10
-#define CONFIG_BME280_FIRST_MEASUREMENT_DELAY_MS  1000
+#define CONFIG_BME280_SETTINGS_DELAY_MS 10
 #define CONFIG_BME280_FORCED_MODE_DELAY_MS        50
 
 // Add missing MPU6050 retry delay

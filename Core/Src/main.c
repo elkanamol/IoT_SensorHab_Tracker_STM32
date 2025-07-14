@@ -103,7 +103,7 @@ void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
 // static void App_Task(void *pvParameters);
 static void MQTT_Task(void *pvParameters);
-void StartBme280Task(void *argument);
+// void StartBme280Task(void *argument);
 void StartW25QTestTask(void *argument);
 void StartDataLoggerTask(void *argument);
 void vGpsTaskStart(void *argument);
@@ -113,7 +113,7 @@ void vGpsTaskStart(void *argument);
 // BaseType_t DataLogger_QueueSystemEvent(const char *event_text);
 
 // BME280 Task and helper functions
-void StartBme280Task(void *argument);
+// void StartBme280Task(void *argument);
 
 void PrintBufferHex(const uint8_t *buffer, uint32_t size, uint32_t baseAddress);
 /* USER CODE END PFP */
