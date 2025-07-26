@@ -49,6 +49,7 @@
 #include "sensor_conversions.h"
 
 #include "lwgps.h"
+#include "peripheral_init_helper.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -91,7 +92,7 @@ static RC76XX_Handle_t mqttHandle;
 // struct bme280_data bme_comp_data;
 
 // lwgps variables
-volatile uint8_t flag = 0;
+volatile uint8_t GpsDmaFlag = 0;
 uint8_t gpsRx[GPS_RX_SIZE]; 
 lwgps_t hgps;
 
@@ -125,7 +126,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART6)
   {
-    flag = 1;
+    GpsDmaFlag = 1;
   }
   /* If the huart1 buffer is full, mark the flag. */
 }
@@ -556,30 +557,53 @@ static void MQTT_Task(void *argument)
   }
 }
 
+static int8_t GPS_Init(void *context) {
+  (void)context; // Unused parameter
+  DEBUG_PRINT_DEBUG("GPS: Initializing...\r\n");
+  if (lwgps_init(&hgps) != 1) {
+    DEBUG_PRINT_ERROR("GPS: lwgps_init failed\r\n");
+    return -1;
+  }
+  if (HAL_UART_Receive_DMA(&huart6, gpsRx, GPS_RX_SIZE) != HAL_OK) {
+    DEBUG_PRINT_ERROR("GPS: HAL_UART_Receive_DMA failed\r\n");
+    return -1;
+  }
+  DEBUG_PRINT_DEBUG("GPS: Initialized successfully\r\n");
+  return 0;
+}
+
 void vGpsTaskStart(void *argument)
 {
   (void)argument;
   DEBUG_PRINT_INFO("GPS Task Started\r\n");
   SensorData_Combined_t current_sensor_data;
-  SensorData_Combined_Int_t gps_task_sensor_data;
-  
+
+  // Retry GPS initialization
+  InitRetryConfig_t gps_init_cfg = {.init_func = GPS_Init,
+                                    .context = NULL,
+                                    .max_retries = CONFIG_TASK_ERROR_THRESHOLD,
+                                    .retry_delay_ms = CONFIG_TASK_ERROR_RETRY_DELAY_MS,
+                                    .backoff_factor = CONFIG_TASK_ERROR_BACKOFF_FACTOR};
+
   memset(gpsRx, 0, GPS_RX_SIZE);
   memset(&current_sensor_data, 0, sizeof(SensorData_Combined_t));
-  memset(&gps_task_sensor_data, 0, sizeof(SensorData_Combined_Int_t));
-  
-  HAL_UART_Receive_DMA(&huart6, gpsRx, GPS_RX_SIZE);
-
-  if (lwgps_init(&hgps) != 1)
-  {
-    DEBUG_PRINT_ERROR("GPS initialization failed\r\n");
-    vTaskDelete(NULL);
+  // Initialize lwgps structure
+  if (Peripheral_InitWithRetry(&gps_init_cfg) != INIT_SUCCESS) {
+    DEBUG_PRINT_ERROR("GPS: Initialization failed after retries\r\n");
+    vTaskDelete(NULL); // Terminate task
   }
 
   for (;;)
   {
-    if (flag == 1)
+    if (GpsDmaFlag == 1)
     {
-      lwgps_process(&hgps, gpsRx, GPS_RX_SIZE);
+
+      if (1 != lwgps_process(&hgps, gpsRx, GPS_RX_SIZE))
+      {
+        DEBUG_PRINT_ERROR("GPS: Processing failed\r\n");
+        GpsDmaFlag = 0; // Reset flag to avoid reprocessing
+        continue;
+      }
       current_sensor_data.gps_longitude = hgps.longitude;
       current_sensor_data.gps_latitude = hgps.latitude;
       current_sensor_data.gps_altitude = hgps.altitude + hgps.geo_sep;
@@ -601,16 +625,6 @@ void vGpsTaskStart(void *argument)
           DEBUG_PRINT_ERROR("GPS: Failed to send data to datalogger\r\n");
         }
       }
-          // // Send GPS data to datalogger if valid
-          // if (hgps.is_valid)
-          // {
-
-      // }
-      // else
-      // {
-      //   // Send invalid GPS data to clear previous valid data
-      //   DataLogger_UpdateGPSData(0.0f, 0.0f, 0.0f, 0.0f);
-      // }
       
       // DEBUG_PRINT_DEBUG("---\r\n");
       DEBUG_PRINT_DEBUG("Valid status: %d\r\n", hgps.is_valid);
@@ -620,7 +634,7 @@ void vGpsTaskStart(void *argument)
       DEBUG_PRINT_DEBUG("Altitude Float: %f\r\n", hgps.altitude + hgps.geo_sep);
       DEBUG_PRINT_DEBUG("Speed Float: %f\r\n", hgps.speed * 1.852f);
       DEBUG_PRINT_DEBUG("Dop: %f, %f, %f\r\n", hgps.dop_h, hgps.dop_v, hgps.dop_v);
-      flag = 0;
+      GpsDmaFlag = 0;
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
