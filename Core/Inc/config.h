@@ -89,6 +89,15 @@
 // Add missing MPU6050 retry delay
 #define CONFIG_MPU6050_RETRY_DELAY_MS             100
 
+
+// --- Task Error Handling ---
+// Define thresholds and behavior for handling errors in tasks.
+#define CONFIG_TASK_ERROR_THRESHOLD                           5   // Max consecutive errors before resetting the sensor (loop)
+#define CONFIG_TASK_ERROR_BACKOFF_FACTOR                     2   // Backoff factor for retry delays
+#define CONFIG_TASK_ERROR_MUTEX_TIMEOUT_MS                  1000 // Timeout for taking the I2C mutex in ms
+#define CONFIG_TASK_ERROR_RETRY_DELAY_MS                  500  // Delay between retries in ms
+
+
 // Add missing DATA_START_ADDRESS (adjust as needed for your flash layout)
 //#define DATA_START_ADDRESS                        0x000000
 

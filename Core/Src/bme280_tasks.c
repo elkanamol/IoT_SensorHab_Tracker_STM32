@@ -110,10 +110,10 @@ void StartBme280Task(void *argument) {
                                        .context =
                                            i2c_mutex, // Use i2c_mutex here
                                        .mutex = i2c_mutex,
-                                       .max_retries = 5,
-                                       .retry_delay_ms = 500,
-                                       .backoff_factor = 2,
-                                       .mutex_timeout_ms = 1000};
+                                       .max_retries = CONFIG_TASK_ERROR_THRESHOLD,
+                                       .retry_delay_ms = CONFIG_TASK_ERROR_RETRY_DELAY_MS,
+                                       .backoff_factor = CONFIG_TASK_ERROR_BACKOFF_FACTOR,
+                                       .mutex_timeout_ms = CONFIG_TASK_ERROR_MUTEX_TIMEOUT_MS};
   InitResult_t res = Peripheral_InitWithRetry(&bme280_init_cfg);
   if (res != INIT_SUCCESS) {
     DEBUG_PRINT_ERROR("BME280: Initialization failed after retries\r\n");
@@ -125,12 +125,14 @@ void StartBme280Task(void *argument) {
 
   // Start main measurement loop
   int8_t rslt;
+  int error_count = 0;
 
   for (;;) {
     if (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
       rslt = BME280_TakeForcedMeasurement();
       xSemaphoreGive(i2c_mutex);
       if (rslt == BME280_OK) {
+        error_count = 0;
         if (DataLogger_UpdateBME280Data(&bme_comp_data) != pdTRUE) {
           DEBUG_PRINT_ERROR("BME280: Failed to update datalogger\r\n");
         }
@@ -138,7 +140,13 @@ void StartBme280Task(void *argument) {
         // Print data for debugging
         BME280_PrintMeasurementData();
       } else {
-        DEBUG_PRINT_ERROR("BME280: Measurement failed, error: %d\r\n", rslt);
+        error_count++;
+        DEBUG_PRINT_ERROR("BME280: Measurement failed %d times, error: %d\r\n", error_count, rslt);
+        if (error_count >= CONFIG_TASK_ERROR_THRESHOLD) {
+          DEBUG_PRINT_ERROR("BME280: Too many errors, restarting...\r\n");
+          BME280_FullInit(i2c_mutex);
+          error_count = 0; // Reset after reinit
+        }
       }
     } else {
       DEBUG_PRINT_ERROR("BME280: Failed to take I2C mutex for measurement\r\n");

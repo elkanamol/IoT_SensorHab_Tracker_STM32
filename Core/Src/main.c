@@ -415,44 +415,6 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-// printf implementation for UART3.
-// int __io_putchar(int ch)
-// {
-//   HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, 0xFFFF);
-//   return ch;
-// }
-
-// // printf implementation for UART3.
-// int _write(int file, char *ptr, int len)
-// {
-//   (void)file;
-//   HAL_UART_Transmit(&huart3, (uint8_t *)ptr, len, 0xFFFF);
-//   return len;
-// }
-
-// // scanf implementation for UART3. (not used in this code)
-// int _read(int file, char *ptr, int len)
-// {
-//   (void)file;
-//   (void)len;
-//   int ch = 0;
-//   HAL_UART_Receive(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
-//   HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
-//   if (ch == 13)
-//   {
-//     ch = 10;
-//     HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
-//   }
-//   else if (ch == 8)
-//   {
-//     ch = 0x30;
-//     HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
-//   }
-
-//   *ptr = ch;
-
-//   return 1;
-// }
 
 /**
  * @brief  MQTT_Task

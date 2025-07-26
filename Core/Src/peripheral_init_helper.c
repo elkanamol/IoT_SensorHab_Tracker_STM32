@@ -1,5 +1,14 @@
 #include "peripheral_init_helper.h"
 
+/**
+ * @brief Attempts to initialize a peripheral with configurable retry mechanism
+ *
+ * Initializes a peripheral by calling the provided initialization function,
+ * with support for multiple retry attempts and exponential backoff.
+ *
+ * @param cfg Pointer to configuration structure defining initialization retry parameters
+ * @return InitResult_t Indicates whether initialization succeeded or failed
+ */
 InitResult_t Peripheral_InitWithRetry(const InitRetryConfig_t *cfg)
 {
     uint32_t attempt = 0;
