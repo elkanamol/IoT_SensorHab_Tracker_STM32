@@ -416,59 +416,91 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+static int8_t ModemAndNetwork_Init(void *context) {
+  RC76XX_Result_t res;
+
+  // Register all URC handlers
+  res = RC76XX_RegisterURCHandlers(&mqttHandle);
+  if (res != RC76XX_OK) {
+    DEBUG_PRINT_ERROR("Failed to register URC handlers: %d\r\n", res);
+    return -1;
+  }
+  DEBUG_PRINT_INFO("Registered all URC handlers\r\n");
+
+  // Reset modem
+  DEBUG_PRINT_INFO("Resetting modem...\r\n");
+  res = RC76XX_Reset(&mqttHandle);
+  if (res != RC76XX_OK) {
+    DEBUG_PRINT_ERROR("Modem reset failed\r\n");
+    return -1;
+  }
+
+  // Wait for modem to stabilize
+  DEBUG_PRINT_INFO("Waiting for modem to stabilize (%d ms)...\r\n",
+                   CONFIG_MODEM_RESET_DELAY_MS);
+  vTaskDelay(pdMS_TO_TICKS(CONFIG_MODEM_RESET_DELAY_MS));
+
+  // Initialize modem
+  DEBUG_PRINT_INFO("Initializing modem...\r\n");
+  res = RC76XX_Initialize(&mqttHandle);
+  if (res != RC76XX_OK) {
+    DEBUG_PRINT_ERROR("Modem initialization failed\r\n");
+    return -1;
+  }
+  DEBUG_PRINT_INFO("Initialized, IMEI=%s\r\n", mqttHandle.imei);
+
+  // Attach to network
+  DEBUG_PRINT_INFO("Attaching to network...\r\n");
+  res = RC76XX_NetworkAttach(&mqttHandle);
+  if (res != RC76XX_OK) {
+    DEBUG_PRINT_ERROR("Network attachment failed\r\n");
+    return -1;
+  }
+  DEBUG_PRINT_INFO("Network ready, IP=%s\r\n", mqttHandle.ip);
+
+  DEBUG_PRINT_INFO("Modem and network initialized successfully\r\n");
+  return 0;
+}
+
+static int8_t MQTT_Connect(void *context) {
+  RC76XX_Result_t res;
+
+  // Connect to MQTT broker
+  res = RC76XX_ConnectMQTT(&mqttHandle);
+  if (res != RC76XX_OK) {
+    DEBUG_PRINT_ERROR("MQTT connection failed\r\n");
+    return -1;
+  }
+
+  DEBUG_PRINT_INFO("MQTT connected successfully\r\n");
+  return 0;
+}
 
 /**
  * @brief  MQTT_Task
  *         Runs the RC76xx MQTT state machine:
  *         Initialize → NetworkAttach → ConfigMQTT → ConnectMQTT → loop Publish/Subscribe
  */
-static void MQTT_Task(void *argument)
-{
+static void MQTT_Task(void *argument) {
   (void)argument;
   RC76XX_Result_t res;
-  TickType_t delay = pdMS_TO_TICKS(20000);
   SensorData_Combined_t sensor_data;
 
-  // Register all URC handlers
-  res = RC76XX_RegisterURCHandlers(&mqttHandle);
-  if (res != RC76XX_OK)
-  {
-    DEBUG_PRINT_ERROR("Failed to register URC handlers: %d\r\n", res);
-    vTaskSuspend(NULL);
-  }
-  DEBUG_PRINT_INFO("Registered all URC handlers\r\n");
+  // Step 1: Retry modem and network initialization
+  InitRetryConfig_t modem_init_cfg = {
+      .init_func = ModemAndNetwork_Init,
+      .context = NULL,
+      .max_retries = CONFIG_MODEM_INIT_MAX_RETRIES,
+      .retry_delay_ms = CONFIG_MODEM_INIT_RETRY_DELAY_MS,
+      .backoff_factor = CONFIG_TASK_ERROR_BACKOFF_FACTOR};
 
-  /* 0) Reset the modem */
-  DEBUG_PRINT_INFO("MQTT_Task: Resetting modem...\r\n");
-  res = RC76XX_Reset(&mqttHandle);
-  if (res != RC76XX_OK)
-  {
-    DEBUG_PRINT_ERROR("Reset modem failed: %d\r\n", res);
-    vTaskSuspend(NULL);
+  if (Peripheral_InitWithRetry(&modem_init_cfg) != INIT_SUCCESS) {
+    DEBUG_PRINT_ERROR(
+        "Modem and network initialization failed after retries\r\n");
+    vTaskDelete(NULL); // Terminate task
   }
-  vTaskDelay(delay);
 
-  /* 1) Initialize modem */
-  DEBUG_PRINT_INFO("MQTT_Task: Initializing modem...\r\n");
-  res = RC76XX_Initialize(&mqttHandle);
-  if (res != RC76XX_OK)
-  {
-    DEBUG_PRINT_ERROR("Init failed: %d\r\n", res);
-    vTaskSuspend(NULL);
-  }
-  DEBUG_PRINT_INFO("Initialized, IMEI=%s\r\n", mqttHandle.imei);
-
-  /* 2) Attach to network & get IP */
-  DEBUG_PRINT_INFO("Attaching to network...\r\n");
-  res = RC76XX_NetworkAttach(&mqttHandle);
-  if (res != RC76XX_OK)
-  {
-    DEBUG_PRINT_ERROR("NetworkAttach failed: %d\r\n", res);
-    vTaskSuspend(NULL);
-  }
-  DEBUG_PRINT_INFO("Network ready, IP=%s\r\n", mqttHandle.ip);
-
-  /* 3) Configure MQTT */
+  // Step 2: Configure MQTT
   const char *broker = CONFIG_MQTT_BROKER_HOSTNAME;
   const uint16_t port = CONFIG_MQTT_BROKER_PORT;
   const char *clientID = CONFIG_MQTT_CLIENT_ID;
@@ -477,82 +509,61 @@ static void MQTT_Task(void *argument)
   const char *subTopic = CONFIG_MQTT_SUBSCRIBE_TOPIC;
   const char *pubTopic = CONFIG_MQTT_PUBLISH_TOPIC;
 
-  DEBUG_PRINT_INFO("Configuring MQTT %s:%u, ClientID=%s...\r\n", broker, port, clientID);
-  res = RC76XX_ConfigMQTT(&mqttHandle, broker, port, clientID, pubTopic, user, pass, false, false, 120);
-  if (res != RC76XX_OK)
-  {
-    DEBUG_PRINT_ERROR("ConfigMQTT failed: %d\r\n", res);
-    vTaskSuspend(NULL);
+  DEBUG_PRINT_INFO("Configuring MQTT %s:%u, ClientID=%s...\r\n", broker, port,
+                   clientID);
+  res = RC76XX_ConfigMQTT(&mqttHandle, broker, port, clientID, pubTopic, user,
+                          pass, false, false, 120);
+  if (res != RC76XX_OK) {
+    DEBUG_PRINT_ERROR("MQTT configuration failed\r\n");
+    vTaskDelete(NULL); // Terminate task
   }
-  DEBUG_PRINT_INFO("MQTT configured, cfg_id=%d\r\n", mqttHandle.mqtt_cfg_id);
 
-  /* 4) Connect MQTT */
-  DEBUG_PRINT_INFO("Connecting MQTT...\r\n");
-  res = RC76XX_ConnectMQTT(&mqttHandle);
-  if (res != RC76XX_OK)
-  {
-    DEBUG_PRINT_ERROR("ConnectMQTT failed: %d\r\n", res);
-    vTaskSuspend(NULL);
+  // Step 3: Retry MQTT connection
+  InitRetryConfig_t mqtt_connect_cfg = {
+      .init_func = MQTT_Connect,
+      .context = NULL,
+      .max_retries = CONFIG_TASK_ERROR_THRESHOLD,
+      .retry_delay_ms =
+          CONFIG_TASK_ERROR_RETRY_DELAY_MS * 2,
+      .backoff_factor = CONFIG_TASK_ERROR_BACKOFF_FACTOR};
+
+  if (Peripheral_InitWithRetry(&mqtt_connect_cfg) != INIT_SUCCESS) {
+    DEBUG_PRINT_ERROR("MQTT connection failed after retries\r\n");
+    vTaskDelete(NULL); // Terminate task
   }
-  vTaskDelay(delay);
-  DEBUG_PRINT_INFO("MQTT connected\r\n");
 
-  /* Subscribe to a topic */
+  // Subscribe to a topic
   DEBUG_PRINT_INFO("Subscribing to %s...\r\n", subTopic);
   res = RC76XX_Subscribe(&mqttHandle, subTopic);
-  if (res == RC76XX_OK)
-  {
+  if (res == RC76XX_OK) {
     DEBUG_PRINT_INFO("Subscribed to %s\r\n", subTopic);
-  }
-  else
-  {
+  } else {
     DEBUG_PRINT_ERROR("Subscribe failed: %d\r\n", res);
   }
 
   // Main MQTT transmission loop
-  for (;;)
-  {
-    // Blocking until data is available in the queue
+  for (;;) {
     if (xMQTTQueue != NULL &&
-        xQueueReceive(xMQTTQueue, &sensor_data, pdMS_TO_TICKS(portMAX_DELAY)) == pdTRUE)
-    {
-      // Convert to integer representation
-
-      // Enhanced payload with GPS data
-      char payload[400]; // Increased size for GPS data
-
-      // float version
-      snprintf(payload, sizeof(payload), "field1=%02f&field2=%02f&field3=%02f&field4=%02f&field5=%03f&field6=%03f&field7=%03f&field8=%03f&lat=%06f&long=%06f",
-               sensor_data.bme_temperature, sensor_data.bme_pressure, sensor_data.bme_humidity,
-               sensor_data.mpu_accel_x, sensor_data.mpu_accel_y, sensor_data.mpu_accel_z,
+        xQueueReceive(xMQTTQueue, &sensor_data, pdMS_TO_TICKS(portMAX_DELAY)) ==
+            pdTRUE) {
+      char payload[400];
+      snprintf(payload, sizeof(payload),
+               "field1=%02f&field2=%02f&field3=%02f&field4=%02f&field5=%03f&"
+               "field6=%03f&field7=%03f&field8=%03f&lat=%06f&long=%06f",
+               sensor_data.bme_temperature, sensor_data.bme_pressure,
+               sensor_data.bme_humidity, sensor_data.mpu_accel_x,
+               sensor_data.mpu_accel_y, sensor_data.mpu_accel_z,
                sensor_data.mpu_gyro_x, sensor_data.mpu_gyro_y,
                sensor_data.gps_latitude, sensor_data.gps_longitude);
 
-      // printf("MQTT: Publishing combined sensor data with GPS\r\n");
-      DEBUG_PRINT_INFO("BME280: %s, MPU6050: %s, GPS: %s\r\n",
-             sensor_data.bme_valid ? "Valid" : "Invalid",
-             sensor_data.mpu_valid ? "Valid" : "Invalid",
-             sensor_data.gps_valid ? "Valid" : "Invalid");
-      DEBUG_PRINT_DEBUG("MQTT Payload: %s\r\n", payload);
-
-      // Publish to ThingSpeak
       res = RC76XX_Publish(&mqttHandle, pubTopic, payload);
-      if (res == RC76XX_OK)
-      {
+      if (res == RC76XX_OK) {
         DEBUG_PRINT_INFO("MQTT: Publish successful\r\n");
-      }
-      else
-      {
+      } else {
         DEBUG_PRINT_ERROR("MQTT: Publish failed: %d\r\n", res);
       }
     }
-    else
-    {
-      // No data received in timeout period
-      // Optional: Send heartbeat or handle timeout
-    }
 
-    // Small delay before next iteration
     vTaskDelay(pdMS_TO_TICKS(1));
   }
 }

@@ -95,7 +95,11 @@
 #define CONFIG_TASK_ERROR_THRESHOLD                           5   // Max consecutive errors before resetting the sensor (loop)
 #define CONFIG_TASK_ERROR_BACKOFF_FACTOR                     2   // Backoff factor for retry delays
 #define CONFIG_TASK_ERROR_MUTEX_TIMEOUT_MS                  1000 // Timeout for taking the I2C mutex in ms
-#define CONFIG_TASK_ERROR_RETRY_DELAY_MS                  500  // Delay between retries in ms
+#define CONFIG_TASK_ERROR_RETRY_DELAY_MS                    500  // Delay between retries in ms
+
+#define CONFIG_MODEM_RESET_DELAY_MS 20000 // 20 seconds
+#define CONFIG_MODEM_INIT_RETRY_DELAY_MS 5000 // 5 seconds
+#define CONFIG_MODEM_INIT_MAX_RETRIES 3  // Delay between retries in ms
 
 
 // Add missing DATA_START_ADDRESS (adjust as needed for your flash layout)
