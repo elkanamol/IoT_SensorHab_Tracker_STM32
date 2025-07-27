@@ -92,10 +92,13 @@
 
 // --- Task Error Handling ---
 // Define thresholds and behavior for handling errors in tasks.
-#define CONFIG_TASK_ERROR_THRESHOLD                           5   // Max consecutive errors before resetting the sensor (loop)
-#define CONFIG_TASK_ERROR_BACKOFF_FACTOR                     2   // Backoff factor for retry delays
-#define CONFIG_TASK_ERROR_MUTEX_TIMEOUT_MS                  1000 // Timeout for taking the I2C mutex in ms
-#define CONFIG_TASK_ERROR_RETRY_DELAY_MS                    500  // Delay between retries in ms
+#define CONFIG_TASK_ERROR_THRESHOLD                             5   // Max consecutive errors before resetting the sensor (loop)
+#define CONFIG_TASK_ERROR_BACKOFF_FACTOR                        2   // Backoff factor for retry delays
+#define CONFIG_TASK_ERROR_MUTEX_TIMEOUT_MS                      1000 // Timeout for taking the I2C mutex in ms
+#define CONFIG_TASK_ERROR_RETRY_DELAY_MS_500                    500  // Delay between retries in ms
+#define CONFIG_TASK_ERROR_RETRY_DELAY_MS_1000                   1000 // Delay between retries in ms
+#define CONFIG_TASK_ERROR_RETRY_DELAY_MS_2000                   2000 // Delay between retries in ms
+#define CONFIG_TASK_ERROR_RETRY_DELAY_MS_5000                   5000 // Delay between retries
 
 #define CONFIG_MODEM_RESET_DELAY_MS 20000 // 20 seconds
 #define CONFIG_MODEM_INIT_RETRY_DELAY_MS 5000 // 5 seconds

@@ -55,6 +55,7 @@ static void DataLogger_CheckMQTTTransmission(void);
  *  2. Verifies the manufacturer and device ID of the flash chip
  */
 static int8_t DataLogger_FlashInit(void *context) {
+  (void)context; // Unused parameter
   uint8_t flash_status;
   uint8_t manufacturer, device_id;
 
@@ -117,7 +118,7 @@ static uint8_t DataLogger_Initialize(void)
         .init_func = DataLogger_FlashInit,
         .context = NULL,
         .max_retries = CONFIG_TASK_ERROR_THRESHOLD,
-        .retry_delay_ms = CONFIG_TASK_ERROR_RETRY_DELAY_MS,
+        .retry_delay_ms = CONFIG_TASK_ERROR_RETRY_DELAY_MS_500,
         .backoff_factor = CONFIG_TASK_ERROR_BACKOFF_FACTOR,
         .mutex_timeout_ms = CONFIG_TASK_ERROR_MUTEX_TIMEOUT_MS};
     if (Peripheral_InitWithRetry(&flash_init_cfg) != INIT_SUCCESS) {
@@ -210,10 +211,11 @@ static void DataLogger_SaveCurrentDataToFlash(void)
     records_in_buffer++;
 
     DEBUG_PRINT_DEBUG(
-        "DataLogger: Saved record #%u - BME280(%s) MPU6050(%s)\r\n",
-        record_to_save.record_id,
+        "DataLogger: Saved record #%lu - BME280(%s) MPU6050(%s) GPS(%s)\r\n",
+        (unsigned long)record_to_save.record_id,
         record_to_save.bme_valid ? "Valid" : "Invalid",
-        record_to_save.mpu_valid ? "Valid" : "Invalid");
+        record_to_save.mpu_valid ? "Valid" : "Invalid",
+        record_to_save.gps_valid ? "Valid" : "Invalid");
 
     // Flush when sector buffer is full
     if (records_in_buffer >= RECORDS_PER_SECTOR) {

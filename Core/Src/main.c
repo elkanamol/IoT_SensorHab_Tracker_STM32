@@ -277,14 +277,6 @@ int main(void)
   configASSERT(TaskStatus == pdPASS);
   DEBUG_PRINT_DEBUG("uAT task created\n");
 
-  // // (Optional) your other application tasks
-  // xTaskCreate(App_Task,
-  //             "AppTask",
-  //             512,
-  //             NULL,
-  //             tskIDLE_PRIORITY + 1,
-  //             NULL);
-
   TaskStatus = xTaskCreate(MQTT_Task,
                            "MQTT_Task",
                            CONFIG_TASK_STACK_SIZE_MQTT,
@@ -417,6 +409,8 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 static int8_t ModemAndNetwork_Init(void *context) {
+  (void)context; // Unused parameter
+  DEBUG_PRINT_INFO("Modem and network initialization started\r\n");
   RC76XX_Result_t res;
 
   // Register all URC handlers
@@ -463,6 +457,8 @@ static int8_t ModemAndNetwork_Init(void *context) {
 }
 
 static int8_t MQTT_Connect(void *context) {
+  (void)context; // Unused parameter
+  DEBUG_PRINT_INFO("Connecting to MQTT broker...\r\n");
   RC76XX_Result_t res;
 
   // Connect to MQTT broker
@@ -523,8 +519,7 @@ static void MQTT_Task(void *argument) {
       .init_func = MQTT_Connect,
       .context = NULL,
       .max_retries = CONFIG_TASK_ERROR_THRESHOLD,
-      .retry_delay_ms =
-          CONFIG_TASK_ERROR_RETRY_DELAY_MS * 2,
+      .retry_delay_ms = CONFIG_TASK_ERROR_RETRY_DELAY_MS_1000,
       .backoff_factor = CONFIG_TASK_ERROR_BACKOFF_FACTOR};
 
   if (Peripheral_InitWithRetry(&mqtt_connect_cfg) != INIT_SUCCESS) {
@@ -590,11 +585,12 @@ void vGpsTaskStart(void *argument)
   SensorData_Combined_t current_sensor_data;
 
   // Retry GPS initialization
-  InitRetryConfig_t gps_init_cfg = {.init_func = GPS_Init,
-                                    .context = NULL,
-                                    .max_retries = CONFIG_TASK_ERROR_THRESHOLD,
-                                    .retry_delay_ms = CONFIG_TASK_ERROR_RETRY_DELAY_MS,
-                                    .backoff_factor = CONFIG_TASK_ERROR_BACKOFF_FACTOR};
+  InitRetryConfig_t gps_init_cfg = {
+      .init_func = GPS_Init,
+      .context = NULL,
+      .max_retries = CONFIG_TASK_ERROR_THRESHOLD,
+      .retry_delay_ms = CONFIG_TASK_ERROR_RETRY_DELAY_MS_1000,
+      .backoff_factor = CONFIG_TASK_ERROR_BACKOFF_FACTOR};
 
   memset(gpsRx, 0, GPS_RX_SIZE);
   memset(&current_sensor_data, 0, sizeof(SensorData_Combined_t));
@@ -626,10 +622,8 @@ void vGpsTaskStart(void *argument)
         float altitude_msl = hgps.altitude + hgps.geo_sep; // Mean sea level altitude
 
         BaseType_t result = DataLogger_UpdateGPSData(
-            hgps.latitude,
-                hgps.longitude,
-                altitude_msl,
-                speed_kmh);
+            (float)hgps.latitude, (float)hgps.longitude, (float)altitude_msl,
+            (float)speed_kmh);
 
         if (result != pdTRUE)
         {

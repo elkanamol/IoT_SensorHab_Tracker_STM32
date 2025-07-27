@@ -111,7 +111,7 @@ void StartBme280Task(void *argument) {
                                            i2c_mutex, // Use i2c_mutex here
                                        .mutex = i2c_mutex,
                                        .max_retries = CONFIG_TASK_ERROR_THRESHOLD,
-                                       .retry_delay_ms = CONFIG_TASK_ERROR_RETRY_DELAY_MS,
+                                       .retry_delay_ms = CONFIG_TASK_ERROR_RETRY_DELAY_MS_500,
                                        .backoff_factor = CONFIG_TASK_ERROR_BACKOFF_FACTOR,
                                        .mutex_timeout_ms = CONFIG_TASK_ERROR_MUTEX_TIMEOUT_MS};
   InitResult_t res = Peripheral_InitWithRetry(&bme280_init_cfg);

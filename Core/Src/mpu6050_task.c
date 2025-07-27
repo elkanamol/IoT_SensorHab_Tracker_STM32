@@ -119,7 +119,7 @@ void MPU6050_Task_Start(void *argument)
         .context = MPU6050_Task_Handle.mutex,
         .mutex = MPU6050_Task_Handle.mutex,
         .max_retries = CONFIG_TASK_ERROR_THRESHOLD,
-        .retry_delay_ms = CONFIG_TASK_ERROR_RETRY_DELAY_MS,
+        .retry_delay_ms = CONFIG_TASK_ERROR_RETRY_DELAY_MS_500,
         .backoff_factor = CONFIG_TASK_ERROR_BACKOFF_FACTOR,
         .mutex_timeout_ms = CONFIG_TASK_ERROR_MUTEX_TIMEOUT_MS};
     InitResult_t res = Peripheral_InitWithRetry(&mpu6050_init_cfg);
