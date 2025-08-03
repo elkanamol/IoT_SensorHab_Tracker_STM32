@@ -274,7 +274,6 @@ BaseType_t DataLogger_ForceSave(void)
     return xQueueSend(xDataLoggerQueue, &message, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS));
 }
 
-// Add GPS update function
 /**
  * @brief Update GPS data in current sensor data
  * 

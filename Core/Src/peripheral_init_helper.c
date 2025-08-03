@@ -15,6 +15,7 @@ InitResult_t Peripheral_InitWithRetry(const InitRetryConfig_t *cfg)
     uint32_t delay = cfg->retry_delay_ms;
     int8_t result;
 
+    // if the max_retries is 0, it means infinite retries
     while (cfg->max_retries == 0 || attempt < cfg->max_retries) {
         result = cfg->init_func(cfg->context);
         if (result == 0) { // Success

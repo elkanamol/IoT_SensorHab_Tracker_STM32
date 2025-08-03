@@ -92,7 +92,7 @@ static RC76XX_Handle_t mqttHandle;
 // struct bme280_data bme_comp_data;
 
 // lwgps variables
-volatile uint8_t GpsDmaFlag = 0;
+volatile uint8_t gps_dma_flag = 0;
 uint8_t gpsRx[GPS_RX_SIZE]; 
 lwgps_t hgps;
 
@@ -126,7 +126,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART6)
   {
-    GpsDmaFlag = 1;
+    gps_dma_flag = 1;
   }
   /* If the huart1 buffer is full, mark the flag. */
 }
@@ -602,13 +602,13 @@ void vGpsTaskStart(void *argument)
 
   for (;;)
   {
-    if (GpsDmaFlag == 1)
+    if (gps_dma_flag == 1)
     {
 
-      if (1 != lwgps_process(&hgps, gpsRx, GPS_RX_SIZE))
+      if (lwgps_process(&hgps, gpsRx, GPS_RX_SIZE) != 1)
       {
         DEBUG_PRINT_ERROR("GPS: Processing failed\r\n");
-        GpsDmaFlag = 0; // Reset flag to avoid reprocessing
+        gps_dma_flag = 0; // Reset flag to avoid reprocessing
         continue;
       }
       current_sensor_data.gps_longitude = hgps.longitude;
@@ -639,7 +639,7 @@ void vGpsTaskStart(void *argument)
       DEBUG_PRINT_DEBUG("Altitude Float: %f\r\n", hgps.altitude + hgps.geo_sep);
       DEBUG_PRINT_DEBUG("Speed Float: %f\r\n", hgps.speed * 1.852f);
       DEBUG_PRINT_DEBUG("Dop: %f, %f, %f\r\n", hgps.dop_h, hgps.dop_v, hgps.dop_v);
-      GpsDmaFlag = 0;
+      gps_dma_flag = 0;
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
