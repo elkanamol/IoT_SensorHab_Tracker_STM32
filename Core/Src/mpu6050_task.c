@@ -112,7 +112,7 @@ void MPU6050_Task_Start(void *argument)
         vTaskDelete(NULL);
         return;
     }
-    vTaskDelay(CONFIG_MPU6050_STARTUP_DELAY_MS);
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_MPU6050_STARTUP_DELAY_MS));
 
     InitRetryConfig_t mpu6050_init_cfg = {
         .init_func = MPU6050_FullInit,
