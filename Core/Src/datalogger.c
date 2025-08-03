@@ -9,6 +9,8 @@
 #include "sensor_conversions.h"
 #include <string.h>
 #include "print.h"
+#include "config.h"
+#include "peripheral_init_helper.h"
 
 // Private variables
 static uint32_t ring_buffer_write_address = RING_BUFFER_START_ADDRESS;
@@ -42,14 +44,55 @@ static void DataLogger_InitializeRecord(SensorData_Combined_t *record);
 static void DataLogger_CheckPeriodicSave(void);
 static void DataLogger_CheckMQTTTransmission(void);
 
+
+
+/**
+ * @brief Initialize and verify the W25Q64 flash memory device
+ * @param context Unused context parameter (can be NULL)
+ * @return 0 on successful initialization, -1 on failure
+ * @details Performs two key operations:
+ *  1. Initializes the W25Q64 flash using SPI interface
+ *  2. Verifies the manufacturer and device ID of the flash chip
+ */
+static int8_t DataLogger_FlashInit(void *context) {
+  (void)context; // Unused parameter
+  uint8_t flash_status;
+  uint8_t manufacturer, device_id;
+
+  // Initialize W25Q64 flash
+  flash_status =
+      w25qxx_basic_init(W25Q64, W25QXX_INTERFACE_SPI, W25QXX_BOOL_FALSE);
+  if (flash_status != 0) {
+    DEBUG_PRINT_ERROR(
+        "DataLogger: Failed to initialize W25Q64 flash (err=%d)\r\n",
+        flash_status);
+    return -1;
+  }
+
+  // Verify chip ID
+  flash_status = w25qxx_basic_get_id(&manufacturer, &device_id);
+  if (flash_status == 0) {
+    DEBUG_PRINT_DEBUG(
+        "DataLogger: W25Q64 ID - manufacturer=0x%02X, device=0x%02X\r\n",
+        manufacturer, device_id);
+    if (manufacturer != 0xEF || device_id != 0x16) {
+      DEBUG_PRINT_ERROR("DataLogger: Warning - Unexpected chip ID\r\n");
+    }
+  } else {
+    DEBUG_PRINT_ERROR("DataLogger: Failed to read W25Q64 chip ID (err=%d)\r\n",
+                      flash_status);
+    return -1;
+  }
+
+  return 0;
+}
+
 /**
  * @brief Initialize Data Logger subsystem
  * @retval 0: Success, 1: Error
  */
 static uint8_t DataLogger_Initialize(void)
 {
-    uint8_t flash_status;
-    uint8_t manufacturer, device_id;
     
     DEBUG_PRINT_DEBUG("DataLogger: Initializing unified sensor logging system...\r\n");
     
@@ -70,23 +113,21 @@ static uint8_t DataLogger_Initialize(void)
     // Initialize sector buffer
     memset(sector_buffer, 0xFF, sizeof(sector_buffer));
     records_in_buffer = 0;
-    
-    // Initialize W25Q64 flash
-    flash_status = w25qxx_basic_init(W25Q64, W25QXX_INTERFACE_SPI, W25QXX_BOOL_FALSE);
-    if (flash_status != 0) {
-        DEBUG_PRINT_ERROR("DataLogger: Failed to initialize W25Q64 flash (err=%d)\r\n", flash_status);
-        return 1;
+
+    InitRetryConfig_t flash_init_cfg = {
+        .init_func = DataLogger_FlashInit,
+        .context = NULL,
+        .max_retries = CONFIG_TASK_ERROR_THRESHOLD,
+        .retry_delay_ms = CONFIG_TASK_ERROR_RETRY_DELAY_MS_500,
+        .backoff_factor = CONFIG_TASK_ERROR_BACKOFF_FACTOR,
+        .mutex_timeout_ms = CONFIG_TASK_ERROR_MUTEX_TIMEOUT_MS};
+    if (Peripheral_InitWithRetry(&flash_init_cfg) != INIT_SUCCESS) {
+      DEBUG_PRINT_ERROR(
+          "DataLogger: Failed to initialize W25Q64 flash after %d retries\r\n",
+          CONFIG_TASK_ERROR_THRESHOLD);
+      return 1;
     }
-    
-    // Verify chip ID
-    flash_status = w25qxx_basic_get_id(&manufacturer, &device_id);
-    if (flash_status == 0) {
-        DEBUG_PRINT_DEBUG("DataLogger: W25Q64 ID - manufacturer=0x%02X, device=0x%02X\r\n", manufacturer, device_id);
-        if (manufacturer != 0xEF || device_id != 0x16) {
-            DEBUG_PRINT_ERROR("DataLogger: Warning - Unexpected chip ID\r\n");
-        }
-    }
-    
+
     // Find current write position in ring buffer
     DataLogger_FindWritePosition();
     
@@ -170,10 +211,11 @@ static void DataLogger_SaveCurrentDataToFlash(void)
     records_in_buffer++;
 
     DEBUG_PRINT_DEBUG(
-        "DataLogger: Saved record #%u - BME280(%s) MPU6050(%s)\r\n",
-        record_to_save.record_id,
+        "DataLogger: Saved record #%lu - BME280(%s) MPU6050(%s) GPS(%s)\r\n",
+        (unsigned long)record_to_save.record_id,
         record_to_save.bme_valid ? "Valid" : "Invalid",
-        record_to_save.mpu_valid ? "Valid" : "Invalid");
+        record_to_save.mpu_valid ? "Valid" : "Invalid",
+        record_to_save.gps_valid ? "Valid" : "Invalid");
 
     // Flush when sector buffer is full
     if (records_in_buffer >= RECORDS_PER_SECTOR) {
@@ -232,7 +274,6 @@ BaseType_t DataLogger_ForceSave(void)
     return xQueueSend(xDataLoggerQueue, &message, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS));
 }
 
-// Add GPS update function
 /**
  * @brief Update GPS data in current sensor data
  * 

@@ -40,18 +40,16 @@
 
 // Defines initial delays for tasks to allow system stabilization.
 #define CONFIG_BME280_CONFIG_DELAY_MS              10
-#define CONFIG_BME280_STARTUP_DELAY_MS             2000
-#define CONFIG_MPU6050_STARTUP_DELAY_MS            2000 // Should be > BME280 startup
+#define CONFIG_BME280_STARTUP_DELAY_MS 1000
+#define CONFIG_MPU6050_STARTUP_DELAY_MS 5000 // Should be > BME280 startup
 #define CONFIG_DATALOGGER_QUEUE_SEND_TIMEOUT_MS   1000
 #define CONFIG_BME280_SETTINGS_DELAY_MS           10
 #define CONFIG_BME280_FIRST_MEASUREMENT_DELAY_MS  1000
 #define CONFIG_BME280_FORCED_MODE_DELAY_MS        50
-#define CONFIG_MPU6050_RETRY_DELAY_MS             100
-#define CONFIG_BME280_STARTUP_DELAY_MS             2000
-#define CONFIG_MPU6050_STARTUP_DELAY_MS            2000 // Should be > BME280 startup
+#define CONFIG_MPU6050_RETRY_DELAY_MS 100
 
 // Timeout for MPU6050 task to wait for the shared I2C bus mutex.
-#define CONFIG_MPU6050_MUTEX_TIMEOUT_MS            5000
+#define CONFIG_MPU6050_MUTEX_TIMEOUT_MS 10000
 
 // BME280 Sensor Hardware Settings
 // These settings trade accuracy for power consumption and measurement time.
@@ -79,18 +77,33 @@
 // Adjust these based on task complexity and memory usage.
 #define CONFIG_TASK_STACK_SIZE_UAT             (512)
 #define CONFIG_TASK_STACK_SIZE_MQTT            (512 * 2)
-#define CONFIG_TASK_STACK_SIZE_BME280          (512)
-#define CONFIG_TASK_STACK_SIZE_MPU6050         (512)
+#define CONFIG_TASK_STACK_SIZE_BME280 (1024)
+#define CONFIG_TASK_STACK_SIZE_MPU6050 (1024)
 #define CONFIG_TASK_STACK_SIZE_DATALOGGER      (2048)
 #define CONFIG_TASK_STACK_SIZE_GPS             (1536)
 
 // Add missing BME280 delays (tune as needed)
-#define CONFIG_BME280_SETTINGS_DELAY_MS           10
-#define CONFIG_BME280_FIRST_MEASUREMENT_DELAY_MS  1000
+#define CONFIG_BME280_SETTINGS_DELAY_MS 10
 #define CONFIG_BME280_FORCED_MODE_DELAY_MS        50
 
 // Add missing MPU6050 retry delay
 #define CONFIG_MPU6050_RETRY_DELAY_MS             100
+
+
+// --- Task Error Handling ---
+// Define thresholds and behavior for handling errors in tasks.
+#define CONFIG_TASK_ERROR_THRESHOLD                             5   // Max consecutive errors before resetting the sensor (loop)
+#define CONFIG_TASK_ERROR_BACKOFF_FACTOR                        2   // Backoff factor for retry delays
+#define CONFIG_TASK_ERROR_MUTEX_TIMEOUT_MS                      1000 // Timeout for taking the I2C mutex in ms
+#define CONFIG_TASK_ERROR_RETRY_DELAY_MS_500                    500  // Delay between retries in ms
+#define CONFIG_TASK_ERROR_RETRY_DELAY_MS_1000                   1000 // Delay between retries in ms
+#define CONFIG_TASK_ERROR_RETRY_DELAY_MS_2000                   2000 // Delay between retries in ms
+#define CONFIG_TASK_ERROR_RETRY_DELAY_MS_5000                   5000 // Delay between retries
+
+#define CONFIG_MODEM_RESET_DELAY_MS 20000 // 20 seconds
+#define CONFIG_MODEM_INIT_RETRY_DELAY_MS 5000 // 5 seconds
+#define CONFIG_MODEM_INIT_MAX_RETRIES 3  // Delay between retries in ms
+
 
 // Add missing DATA_START_ADDRESS (adjust as needed for your flash layout)
 //#define DATA_START_ADDRESS                        0x000000
