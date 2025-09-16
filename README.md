@@ -243,7 +243,7 @@ screen /dev/ttyACM0 115200
 
 ### Hardware Documentation:
 - **BME280 Sensor**: [Official Datasheet](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds002.pdf)
-- **RC76xx Modem**: [AT Command Reference Guide](https://source.sierrawireless.com/resources/airprime/minicard/74xx_series/4117727_rc76xx_atcommand_referencemanual/)
+- **RC76xx Modem**: [AT Command Reference Guide](https://source.sierrawireless.com/resources/airprime/software/rc76xx-at-command-reference-guide/)
 - **STM32F756ZG**: [Reference Manual](https://www.st.com/resource/en/reference_manual/rm0385-stm32f75xxx-and-stm32f74xxx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
 
 *Note: Large documentation files are not stored in this repository to keep it lightweight. Please download directly from the official sources above.*
