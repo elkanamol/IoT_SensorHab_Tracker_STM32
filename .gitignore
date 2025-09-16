@@ -15,6 +15,15 @@
 *.map
 *.su
 
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+build.ninja
+compile_commands.json
+CTestTestfile.cmake
+install_manifest.txt
+
 # STM32CubeMX generated files (keep only necessary ones)
 .mxproject
 
@@ -97,6 +106,11 @@ Thumbs.db
 # FreeRTOS specific (keep the source)
 # Nothing to exclude specifically for FreeRTOS source
 
+# Debug and log files
+logs/*.sal
+*.sal
+*.log
+
 # Specific to this project
 # Exclude DMA debug logs if any
 *dma_log.txt
@@ -104,6 +118,9 @@ Thumbs.db
 
 # Keep all source files
 # Core/Src/ and Core/Inc/ are kept
+
+# Large documentation files (keep references in README)
+docs/*.pdf
 
 # Exclude any large data files that might be used for testing
 *.dat
