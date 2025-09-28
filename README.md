@@ -42,6 +42,7 @@ link for data analysis: [ThingSpeak](https://thingspeak.mathworks.com/channels/2
 ### Prerequisites
 
 **Hardware Requirements:**
+<img width="1166" height="416" alt="image" src="https://github.com/user-attachments/assets/ef02a8a5-9f1c-46aa-96ef-4bcfd39a198c" />
 
 - STM32F756ZG Nucleo development board
 - GY-MPU6050 6-axis IMU module
